@@ -69,24 +69,47 @@ class PLModel(LightningModule):
             )
             logger.info(f"{phase}: {len(self.datasets[phase])}")
 
-    def on_train_epoch_start(self):
-        pass
+    def on_train_start(self):
+        # 针对小 Batch Size 的 BN 稳定策略
+        # 冻结所有 BatchNorm 层的统计量更新 (running_mean/var)
+        # 这样模型会使用预训练权重的统计量，或者初始阶段不被小 BS 污染
+        if self.cfg.training.get("freeze_bn_stats", False):
+            logger.info("Freezing BatchNorm running stats for stability.")
+            for m in self.forwarder.model.modules():
+                if isinstance(
+                    m,
+                    (
+                        torch.nn.BatchNorm1d,
+                        torch.nn.BatchNorm2d,
+                        torch.nn.BatchNorm3d,
+                        torch.nn.SyncBatchNorm,
+                    ),
+                ):
+                    m.eval()
 
     def training_step(self, batch: Dict[str, Tensor], batch_idx: int):
         additional_info = {}
-        _, loss, _, _, _ = self.forwarder.forward(
+        logits, loss, _, _, _ = self.forwarder.forward(
             batch, phase="train", epoch=self.current_epoch, **additional_info
         )
+
+        # 诊断日志：监控 Cosine 值和 Loss
+        with torch.no_grad():
+            avg_cos = logits.mean().item() if logits is not None else 0.0
+            max_cos = logits.max().item() if logits is not None else 0.0
 
         self.log(
             "train_loss",
             loss.detach().item(),
-            on_step=False,
+            on_step=True,
             on_epoch=True,
             prog_bar=True,
             logger=True,
             sync_dist=True,
         )
+        self.log("train/avg_cos", avg_cos, on_step=True, prog_bar=False, logger=True)
+        self.log("train/max_cos", max_cos, on_step=True, prog_bar=False, logger=True)
+        
         return loss
 
     def _end_process(self, outputs: List[Dict[str, Tensor]], phase: str):
@@ -105,8 +128,8 @@ class PLModel(LightningModule):
             "pred_species",
         ]:
             if isinstance(outputs[0][key], Tensor):
-                result = torch.cat([torch.atleast_1d(x[key]) for x in outputs], dim=1)
-                result = torch.flatten(result, end_dim=1)
+                result = torch.cat([torch.atleast_1d(x[key]) for x in outputs], dim=0)
+                result = torch.flatten(result, end_dim=0)
                 epoch_results[key] = result.detach().cpu().numpy()
             else:
                 result = np.concatenate([x[key] for x in outputs])
@@ -120,7 +143,7 @@ class PLModel(LightningModule):
             epoch_results["pred_idx"] = np.argsort(-pred)[:, :1000]
             test_results_filepath = Path(self.cfg.out_dir) / "test_results"
             if not test_results_filepath.exists():
-                test_results_filepath.mkdir(exist_ok=True)
+                test_results_filepath.mkdir(exist_ok=True, parents=True)
             np.savez_compressed(
                 str(test_results_filepath / "test_results.npz"),
                 **epoch_results,
@@ -185,6 +208,12 @@ class PLModel(LightningModule):
     def test_epoch_end(self, outputs: List[Dict[str, Tensor]]) -> None:
         self._end_process(outputs, "test")
 
+    def lr_scheduler_step(self, scheduler, optimizer_idx, metric):
+        if metric is None:
+            scheduler.step()
+        else:
+            scheduler.step(metric)
+
     def configure_optimizers(self):
         model = self.forwarder.model
         opt_cls, kwargs = init_optimizer_from_config(
@@ -206,7 +235,7 @@ class PLModel(LightningModule):
 
         if scheduler is None:
             return [optimizer]
-        return [optimizer], [scheduler]
+        return [optimizer], [{"scheduler": scheduler, "interval": "epoch"}]
 
     def _dataloader(self, phase: str) -> DataLoader:
         logger.info(f"{phase} data loader called")

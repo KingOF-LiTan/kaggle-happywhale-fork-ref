@@ -150,7 +150,7 @@ class ArcAdaptiveMarginProduct(nn.modules.Module):
         th = torch.from_numpy(np.cos(math.pi - ms)).float().cuda()
         mm = torch.from_numpy(np.sin(math.pi - ms) * ms).float().cuda()
         labels = F.one_hot(labels, self.out_features).float()
-        sine = torch.sqrt(1.0 - torch.pow(cosine, 2))
+        sine = torch.sqrt((1.0 - torch.pow(cosine, 2)).clamp(1e-7, 1.0))
         phi = cosine * cos_m.view(-1, 1) - sine * sin_m.view(-1, 1)
         phi = torch.where(cosine > th.view(-1, 1), phi, cosine - mm.view(-1, 1))
         output = (labels * phi) + ((1.0 - labels) * cosine)

@@ -55,19 +55,20 @@ def main(cfg: DictConfig, pl_model: type) -> Path:
             # env
             default_root_dir=str(out_dir),
             gpus=cfg.training.num_gpus,
-            accelerator="ddp",
+            accelerator="ddp" if cfg.training.num_gpus > 1 else None,
             precision=16 if cfg.training.use_amp else 32,
             # training
             fast_dev_run=cfg.training.debug,  # run only 1 train batch and 1 val batch
             weights_summary="top" if cfg.training.debug else None,
             max_epochs=cfg.training.epoch,
+            max_steps=cfg.training.get("max_steps", -1), # 支持精确步数测试
             gradient_clip_val=cfg.training.gradient_clip_val,
             accumulate_grad_batches=cfg.training.accumulate_grad_batches,
             callbacks=[checkpoint_cb],
             logger=pl_logger,
             resume_from_checkpoint=resume_from,
             num_sanity_val_steps=0 if is_test_mode else 2,
-            sync_batchnorm=True,
+            sync_batchnorm=True if cfg.training.num_gpus > 1 else False,
         )
 
     trainer = _init_trainer()
