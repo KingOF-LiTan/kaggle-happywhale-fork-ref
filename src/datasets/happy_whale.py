@@ -21,8 +21,59 @@ class HappyWhaleDataset(Dataset):
         num_records: int = 0,
         phase: str = "train",
         pseudo_label_filename=None,
+        use_preprocessed: bool = False,
     ) -> pd.DataFrame:
         root = cls.ROOT_PATH
+
+        # In preprocessed mode, we don't need bbox-related csv files.
+        # Only load the minimal metadata for fold split and label encoding.
+        if use_preprocessed:
+            if phase != "test":
+                df = pd.read_csv(str(root / "train.csv"))
+            else:
+                df = pd.read_csv(str(root / "sample_submission.csv"))
+                df["species"] = 0
+                df["individual_id"] = "0"
+
+            df.species.replace(
+                {
+                    "globis": "short_finned_pilot_whale",
+                    "pilot_whale": "short_finned_pilot_whale",
+                    "kiler_whale": "killer_whale",
+                    "bottlenose_dolpin": "bottlenose_dolphin",
+                },
+                inplace=True,
+            )
+
+            le_species = LabelEncoder()
+            le_species.classes_ = np.load(root / "species.npy", allow_pickle=True)
+            le_individual_id = LabelEncoder()
+            le_individual_id.classes_ = np.load(
+                root / "individual_id.npy", allow_pickle=True
+            )
+
+            # For test, these columns are dummy but required downstream.
+            df["species_label"] = le_species.transform(df["species"]) if "species" in df.columns else 0
+            if "individual_id" in df.columns:
+                df["individual_id"] = df["individual_id"].astype(str)
+                df["individual_id_label"] = le_individual_id.transform(df["individual_id"])
+            else:
+                df["individual_id_label"] = 0
+
+            if phase == "test":
+                df["fold"] = -1
+                return df
+
+            kfold = StratifiedKFold(n_splits=num_folds, shuffle=True, random_state=seed)
+            fold = -np.ones(len(df))
+            for i, (_, indices) in enumerate(kfold.split(df, df["individual_id"])):
+                fold[indices] = i
+            df["fold"] = fold
+
+            if num_records:
+                df = df[:num_records]
+            return df
+
         if pseudo_label_filename is not None:
             if "valid" in pseudo_label_filename:
                 df = pd.read_csv(
@@ -283,6 +334,14 @@ class HappyWhaleDataset(Dataset):
         self.df.reset_index(inplace=True)
         self.root = self.ROOT_PATH
         self.phase = phase
+
+        # preprocessed mode
+        self.use_preprocessed = bool(getattr(cfg, "use_preprocessed", False))
+        self.preprocessed_root = getattr(cfg, "preprocessed_root", None)
+        self.preprocessed_test_root = getattr(cfg, "preprocessed_test_root", None)
+        self.train_source_weights = getattr(cfg, "train_source_weights", None)
+        self.test_source = getattr(cfg, "test_source", "original")
+
         self.crop = cfg.crop
         self.bbox = cfg.bbox
         self.bbox2 = cfg.bbox2
@@ -317,6 +376,40 @@ class HappyWhaleDataset(Dataset):
 
     def get_file_name(self, index: int, phase: str = "train") -> str:
         image_id = self.df.loc[index, "image"]
+
+        if self.use_preprocessed:
+            if self.preprocessed_root is None:
+                raise ValueError("preprocessed_root must be set when use_preprocessed=True")
+
+            pre_root = Path(self.preprocessed_root)
+
+            # For test phase, always read from preprocessed_test_root/{test_source}
+            if phase == "test":
+                if self.preprocessed_test_root is None:
+                    raise ValueError(
+                        "preprocessed_test_root must be set when use_preprocessed=True"
+                    )
+                test_root = Path(self.preprocessed_test_root)
+                return str(test_root / self.test_source / image_id)
+
+            # For train/val phase, sample a source by weights
+            weights = self.train_source_weights
+            if weights is None:
+                raise ValueError(
+                    "train_source_weights must be set when use_preprocessed=True"
+                )
+
+            # normalize weights (keep deterministic order)
+            items = [(k, float(v)) for k, v in weights.items() if float(v) > 0]
+            if len(items) == 0:
+                raise ValueError("train_source_weights must have at least one positive weight")
+            keys = [k for k, _ in items]
+            vals = np.array([v for _, v in items], dtype=np.float64)
+            vals = vals / vals.sum()
+
+            src = np.random.choice(keys, p=vals)
+            return str(pre_root / src / image_id)
+
         if self.crop is not None:
             return f"cropped/cropped_{self.crop}_{phase}_images/{image_id}"
 
@@ -333,6 +426,18 @@ class HappyWhaleDataset(Dataset):
 
         x = imageio.imread(root / file_name)
         x = np.asarray(x)
+
+        if self.use_preprocessed:
+            # In preprocessed mode, images are already cropped/resized.
+            image = x.copy()
+            res = {
+                "original_index": self.df.at[index, "original_index"],
+                "file_name": self.df.at[index, "image"],
+                "label_species": self.df.at[index, "species_label"].astype(np.int64),
+                "label": self.df.at[index, "individual_id_label"].astype(np.int64),
+                "image": image,
+            }
+            return res
 
         if self.bbox is not None:
             crop_margin = self.crop_margin

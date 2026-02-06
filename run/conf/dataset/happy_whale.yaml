@@ -31,3 +31,21 @@ p_backfin_charm2: 0.0
 p_none2: 0.0
 pseudo_label_filename: null
 pseudo_label_conf: 0.6
+
+# preprocessed 768px dataset (optional)
+use_preprocessed: false
+# preprocessed data location
+# train images: ${preprocessed_root}/{source}/{image}
+# test images: ${preprocessed_test_root}/{test_source}/{image}
+preprocessed_root: "preprocessed_768/preprocessed_768"
+preprocessed_test_root: "preprocessed_768/test_images"
+
+# sampling weights for train/val when use_preprocessed=true
+train_source_weights:
+  original: 0.1
+  fullbody_yours: 0.225
+  fullbody_charmq: 0.225
+  backfin_yours: 0.225
+  backfin_charmq: 0.225
+
+test_source: original

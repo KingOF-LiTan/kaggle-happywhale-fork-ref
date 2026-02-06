@@ -38,11 +38,14 @@ def get_happy_whale_dataset(
     cfg=None,
 ) -> Dict[str, HappyWhaleDataset]:
 
+    use_preprocessed = getattr(cfg, "use_preprocessed", False)
+
     df = HappyWhaleDataset.create_dataframe(
         num_folds,
         seed,
         num_records,
         phase,
+        use_preprocessed=use_preprocessed,
     )
 
     if cfg.pseudo_label_filename is not None:
@@ -52,6 +55,7 @@ def get_happy_whale_dataset(
             num_records,
             phase,
             pseudo_label_filename=cfg.pseudo_label_filename,
+            use_preprocessed=use_preprocessed,
         )
         df_pl = df_pl[df_pl["conf"] > cfg.pseudo_label_conf]
 
@@ -62,7 +66,9 @@ def get_happy_whale_dataset(
         if cfg.pseudo_label_filename is not None:
             train_df = pd.concat([train_df, df_pl])
 
-        train_dataset = HappyWhaleDataset(train_df, phase, cfg, crop_aug=cfg.crop_aug)
+        # 在预处理模式下，强制禁用 bbox crop aug 以免报错
+        crop_aug = cfg.crop_aug if not use_preprocessed else False
+        train_dataset = HappyWhaleDataset(train_df, phase, cfg, crop_aug=crop_aug)
         val_dataset = HappyWhaleDataset(val_df, phase, cfg)
         test_dataset = HappyWhaleDataset(test_df, phase, cfg)
     elif phase == "valid":
