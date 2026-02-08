@@ -86,7 +86,7 @@ def main(cfg: DictConfig, pl_model: type) -> Path:
     trainer = _init_trainer()
 
     if cfg.training.resume_from is not None:
-        ckpt = torch.load(cfg.training.resume_from, map_location="cpu")
+        ckpt = torch.load(cfg.training.resume_from, map_location="cpu", weights_only=False)
         initial_best_score = ckpt["callbacks"][ModelCheckpoint]["best_model_score"]
         initial_best_score = initial_best_score.detach().cpu().numpy()
         initial_best_model = ckpt["callbacks"][ModelCheckpoint]["best_model_path"]
@@ -122,10 +122,10 @@ def main(cfg: DictConfig, pl_model: type) -> Path:
 
             current_epoch = trainer.current_epoch
             try:
-                state_dict = torch.load(best_ckpt, map_location="cpu")["state_dict"]
+                state_dict = torch.load(best_ckpt, map_location="cpu", weights_only=False)["state_dict"]
             except FileNotFoundError:
                 time.sleep(30)
-                state_dict = torch.load(best_ckpt, map_location="cpu")["state_dict"]
+                state_dict = torch.load(best_ckpt, map_location="cpu", weights_only=False)["state_dict"]
             model.load_state_dict(state_dict, strict=True)
             trainer = _init_trainer(resume=False)
             trainer.current_epoch = current_epoch
