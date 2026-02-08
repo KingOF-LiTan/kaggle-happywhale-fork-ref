@@ -11,8 +11,9 @@ defaults:
   - optimizer: adamw
   - scheduler: cosine_annealing
 
-  - override hydra/job_logging: colorlog
-  - override hydra/hydra_logging: colorlog
+  - override hydra/job_logging: stdout
+  - override hydra/hydra_logging: stdout
+  - _self_
 
 
 #====
