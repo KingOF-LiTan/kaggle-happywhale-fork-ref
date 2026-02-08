@@ -153,10 +153,10 @@ cython_debug/
 .cursor/
 
 # --- HappyWhale Project Specific ---
-happywhale_data/
+happywhale_data/train_images/
+happywhale_data/test_images/
 outputs/
 wandb/
 *.npy
-*.csv
 !run/conf/*.csv
 !src/datasets/*.csv
