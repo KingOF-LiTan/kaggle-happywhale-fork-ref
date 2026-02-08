@@ -1,6 +1,8 @@
 # @package _group_
 type: adamw
 lr: 1.0e-3
+lr_head: 1.0e-3
+lr_head_species: 1.0e-3
 weight_decay: 1.0e-5
 beta1: 0.9
 beta2: 0.999

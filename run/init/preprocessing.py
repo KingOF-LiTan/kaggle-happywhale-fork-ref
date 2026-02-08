@@ -48,6 +48,7 @@ class Preprocessing:
                 A.Downscale(scale_min=0.5, scale_max=0.5, p=cfg.p_downscale),
                 A.RandomGridShuffle(grid=(2, 2), p=cfg.p_shuffle),
                 A.Posterize(p=cfg.p_posterize),
+                A.Sharpen(p=cfg.p_sharpen) if hasattr(cfg, "p_sharpen") else A.NoOp(),
                 A.RandomBrightnessContrast(p=cfg.p_bright_contrast),
                 A.Cutout(p=cfg.p_cutout),
                 A.RandomSnow(p=cfg.p_snow),

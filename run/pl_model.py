@@ -81,11 +81,12 @@ class PLModel(LightningModule):
         self.log(
             "train_loss",
             loss.detach().item(),
-            on_step=False,
+            on_step=True,
             on_epoch=True,
             prog_bar=True,
             logger=True,
             sync_dist=True,
+            batch_size=batch["image"].shape[0],
         )
         return loss
 
@@ -105,8 +106,8 @@ class PLModel(LightningModule):
             "pred_species",
         ]:
             if isinstance(outputs[0][key], Tensor):
-                result = torch.cat([torch.atleast_1d(x[key]) for x in outputs], dim=1)
-                result = torch.flatten(result, end_dim=1)
+                result = torch.cat([torch.atleast_1d(x[key]) for x in outputs], dim=0)
+                result = torch.flatten(result, start_dim=0, end_dim=0)
                 epoch_results[key] = result.detach().cpu().numpy()
             else:
                 result = np.concatenate([x[key] for x in outputs])
@@ -174,16 +175,32 @@ class PLModel(LightningModule):
         return output
 
     def validation_step(self, batch: Dict[str, Tensor], batch_idx: int):
-        return self._evaluation_step(batch, phase="val")
+        out = self._evaluation_step(batch, phase="val")
+        if not hasattr(self, "_val_outputs") or self._val_outputs is None:
+            self._val_outputs = []
+        self._val_outputs.append(out)
+        return out
 
-    def validation_epoch_end(self, outputs: List[Dict[str, Tensor]]) -> None:
+    def on_validation_epoch_end(self) -> None:
+        outputs = getattr(self, "_val_outputs", None)
+        if outputs is None:
+            return
         self._end_process(outputs, "val")
+        self._val_outputs = []
 
     def test_step(self, batch: Dict[str, Tensor], batch_idx: int) -> Dict[str, Tensor]:
-        return self._evaluation_step(batch, phase="test")
+        out = self._evaluation_step(batch, phase="test")
+        if not hasattr(self, "_test_outputs") or self._test_outputs is None:
+            self._test_outputs = []
+        self._test_outputs.append(out)
+        return out
 
-    def test_epoch_end(self, outputs: List[Dict[str, Tensor]]) -> None:
+    def on_test_epoch_end(self) -> None:
+        outputs = getattr(self, "_test_outputs", None)
+        if outputs is None:
+            return
         self._end_process(outputs, "test")
+        self._test_outputs = []
 
     def configure_optimizers(self):
         model = self.forwarder.model
@@ -206,7 +223,15 @@ class PLModel(LightningModule):
 
         if scheduler is None:
             return [optimizer]
-        return [optimizer], [scheduler]
+
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "epoch",
+                "frequency": 1,
+            },
+        }
 
     def _dataloader(self, phase: str) -> DataLoader:
         logger.info(f"{phase} data loader called")
@@ -230,6 +255,8 @@ class PLModel(LightningModule):
             shuffle=shuffle,
             num_workers=num_workers,
             drop_last=drop_last,
+            persistent_workers = (num_workers > 0),
+            pin_memory = True,
         )
         return loader
 

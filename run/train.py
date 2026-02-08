@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 
 import hydra
+import numpy as np
 import torch
 from omegaconf import DictConfig
 from pytorch_lightning import Trainer, seed_everything
@@ -11,6 +12,9 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 
 from run.pl_model import PLModel
+
+if not hasattr(np, "int"):
+    np.int = int
 
 logger = logging.getLogger(__name__)
 
@@ -51,23 +55,32 @@ def main(cfg: DictConfig, pl_model: type) -> Path:
     # init trainer
     def _init_trainer(resume=True):
         resume_from = cfg.training.resume_from if resume else None
+        num_gpus = int(cfg.training.num_gpus)
+        accelerator = "gpu" if torch.cuda.is_available() else "cpu"
+        if num_gpus > 1:
+            strategy = "ddp"
+            sync_batchnorm = True
+        else:
+            strategy = "auto"
+            sync_batchnorm = False
+
         return Trainer(
             # env
             default_root_dir=str(out_dir),
-            gpus=cfg.training.num_gpus,
-            accelerator="ddp",
-            precision=16 if cfg.training.use_amp else 32,
+            accelerator=accelerator,
+            devices=num_gpus if accelerator == "gpu" else None,
+            strategy=strategy,
+            precision="16-mixed" if cfg.training.use_amp and accelerator == "gpu" else 32,
             # training
             fast_dev_run=cfg.training.debug,  # run only 1 train batch and 1 val batch
-            weights_summary="top" if cfg.training.debug else None,
+            enable_model_summary=False if cfg.training.debug else True,
             max_epochs=cfg.training.epoch,
             gradient_clip_val=cfg.training.gradient_clip_val,
             accumulate_grad_batches=cfg.training.accumulate_grad_batches,
             callbacks=[checkpoint_cb],
             logger=pl_logger,
-            resume_from_checkpoint=resume_from,
             num_sanity_val_steps=0 if is_test_mode else 2,
-            sync_batchnorm=True,
+            sync_batchnorm=sync_batchnorm,
         )
 
     trainer = _init_trainer()
@@ -82,13 +95,15 @@ def main(cfg: DictConfig, pl_model: type) -> Path:
             f"Initial best model ({initial_best_score:.4f}): {initial_best_model}"
         )
 
+    resume_from = cfg.training.resume_from
+
     if is_test_mode:
-        trainer.test(model)
+        trainer.test(model, ckpt_path=cfg.test_model)
     else:
-        trainer.fit(model)
+        trainer.fit(model, ckpt_path=resume_from)
 
         if cfg.training.resume_from is None:
-            trainer.test()  # test with the best checkpoint
+            trainer.test(model, ckpt_path="best")  # test with the best checkpoint
         else:
             current_best_score = (
                 trainer.checkpoint_callback.best_model_score.detach().cpu().numpy()
