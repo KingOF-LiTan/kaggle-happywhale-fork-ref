@@ -85,15 +85,31 @@ def main(cfg: DictConfig, pl_model: type) -> Path:
 
     trainer = _init_trainer()
 
+    initial_best_score = None
+    initial_best_model = None
+
     if cfg.training.resume_from is not None:
         ckpt = torch.load(cfg.training.resume_from, map_location="cpu", weights_only=False)
-        initial_best_score = ckpt["callbacks"][ModelCheckpoint]["best_model_score"]
-        initial_best_score = initial_best_score.detach().cpu().numpy()
-        initial_best_model = ckpt["callbacks"][ModelCheckpoint]["best_model_path"]
-        del ckpt
-        logger.info(
-            f"Initial best model ({initial_best_score:.4f}): {initial_best_model}"
-        )
+        try:
+            cb = ckpt.get("callbacks", {})
+            mc_state = None
+            # 兼容旧版：key 可能是类、字符串、或者其它标识
+            if isinstance(cb, dict):
+                mc_state = cb.get(ModelCheckpoint, None) or cb.get("ModelCheckpoint", None)
+            if mc_state is not None:
+                initial_best_score = mc_state["best_model_score"].detach().cpu().numpy()
+                initial_best_model = mc_state["best_model_path"]
+                logger.info(
+                    f"Initial best model ({initial_best_score:.4f}): {initial_best_model}"
+                )
+            else:
+                logger.warning(
+                    "ModelCheckpoint state not found in ckpt['callbacks'], skip initial best score tracking."
+                )
+        except Exception as e:
+            logger.warning(f"Failed to read initial best score from resume checkpoint: {e}")
+        finally:
+            del ckpt
 
     resume_from = cfg.training.resume_from
 
