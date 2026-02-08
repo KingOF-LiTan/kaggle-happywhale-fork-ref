@@ -3,7 +3,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import StratifiedKFold
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import LabelEncoder
 from tqdm import tqdm
@@ -12,11 +11,14 @@ root = Path("./happywhale_data")
 
 
 def parse():
-    parser = argparse.ArgumentParser(description="")
-    parser.add_argument("--train_data_dir", type=str)
-    parser.add_argument("--test_data_dir", type=str)
-    parser.add_argument("--out", type=str)
-    parser.add_argument("--th", type=float, default=0.5)
+    parser = argparse.ArgumentParser(description="KNN submission with multiple modes")
+    parser.add_argument("--train_data_dir", type=str, required=True)
+    parser.add_argument("--test_data_dir", type=str, required=True)
+    parser.add_argument("--out", type=str, required=True)
+    parser.add_argument("--mode", type=str, default="baseline", choices=["baseline", "weighted"], help="Prediction mode")
+    parser.add_argument("--th", type=float, default=None, help="Distance threshold. If None, uses target_new_ratio")
+    parser.add_argument("--target_new_ratio", type=float, default=0.15, help="Target ratio for new_individual (used if th is None)")
+    parser.add_argument("--n_neighbors", type=int, default=100)
 
     args = parser.parse_args()
     return args
@@ -29,12 +31,7 @@ def create_dataframe(num_folds, seed=0, num_records=0, phase="train"):
         df = pd.read_csv(str(root / "sample_submission.csv"))
         return df
 
-    kfold = StratifiedKFold(n_splits=num_folds, shuffle=True, random_state=seed)
-    fold = -np.ones(len(df))
-    for i, (_, indices) in enumerate(kfold.split(df, df["individual_id"])):
-        fold[indices] = i
-
-    df["fold"] = fold
+    # Standard species correction
     df.species.replace(
         {
             "globis": "short_finned_pilot_whale",
@@ -44,11 +41,9 @@ def create_dataframe(num_folds, seed=0, num_records=0, phase="train"):
         },
         inplace=True,
     )
-    le_species = LabelEncoder()
-    le_species.classes_ = np.load(root / "species.npy", allow_pickle=True)
+    
     le_individual_id = LabelEncoder()
     le_individual_id.classes_ = np.load(root / "individual_id.npy", allow_pickle=True)
-    df["species_label"] = le_species.transform(df["species"])
     df["individual_id_label"] = le_individual_id.transform(df["individual_id"])
 
     if num_records:
@@ -59,75 +54,109 @@ def create_dataframe(num_folds, seed=0, num_records=0, phase="train"):
 
 def load_embed(data_dir, train=True):
     res = np.load(data_dir)
-
-    data = {}
-    indices = res["original_index"]
+    indices = res["original_index"].astype(int)
     features = res["embed_features1"]
 
-    for i, idx in enumerate(indices):
-        data[idx] = features[i]
+    # Normalize features
+    norms = np.linalg.norm(features, axis=1, keepdims=True)
+    X = features / np.maximum(norms, 1e-12)
 
-    X = []
-    for i in range(len(data)):
-        X.append(data[i] / np.linalg.norm(data[i]))
-
-    X = np.array(X)
     if train:
-        df = create_dataframe(5, 0, 0, "train")
-        y = df["individual_id_label"].values
+        full_df = create_dataframe(5, 0, 0, "train")
+        y = full_df.iloc[indices]["individual_id_label"].values
         return X, y
     else:
-        return X
+        return X, indices
 
 
 def main():
     args = parse()
 
+    print("Loading embeddings...")
     train_embeddings, train_targets = load_embed(args.train_data_dir, True)
-    test_embeddings = load_embed(args.test_data_dir, False)
+    test_embeddings, test_indices = load_embed(args.test_data_dir, False)
 
-    neigh = NearestNeighbors(n_neighbors=100, metric="cosine")
+    print(f"Fitting KNN on {len(train_embeddings)} samples...")
+    neigh = NearestNeighbors(n_neighbors=args.n_neighbors, metric="cosine")
     neigh.fit(train_embeddings)
 
+    print(f"Querying KNN for {len(test_embeddings)} samples...")
     test_nn_distances, test_nn_idxs = neigh.kneighbors(
-        test_embeddings, 100, return_distance=True
+        test_embeddings, args.n_neighbors, return_distance=True
     )
+
+    # test_nn_distances is cosine distance [0, 2]
+    # top1_dist for thresholding
+    top1_dist = test_nn_distances[:, 0]
+    
+    if args.th is None:
+        args.th = np.quantile(top1_dist, 1.0 - args.target_new_ratio)
+        print(f"Auto-calculated threshold (target ratio {args.target_new_ratio}): {args.th:.6f}")
+    else:
+        actual_ratio = (top1_dist >= args.th).mean()
+        print(f"Using manual threshold {args.th:.6f} (actual new_individual ratio: {actual_ratio:.4%})")
 
     le_individual_id = LabelEncoder()
     le_individual_id.classes_ = np.load(root / "individual_id.npy", allow_pickle=True)
 
-    th = args.th
-    topk = []
+    predictions_map = {}
+    print(f"Generating predictions with {args.mode} mode...")
+    
     for i in tqdm(range(len(test_embeddings))):
-        pred_all = le_individual_id.inverse_transform(
-            train_targets[test_nn_idxs[i]]
-        ).tolist()
-        pred_dist = test_nn_distances[i]
-        if pred_dist[0] < th:
+        distances = test_nn_distances[i]
+        indices = test_nn_idxs[i]
+        
+        if args.mode == "weighted":
+            # Weighted voting: sum of (1 - distance) for each individual
+            vote_scores = {}
+            for d, idx in zip(distances, indices):
+                target = train_targets[idx]
+                sim = 1.0 - d
+                vote_scores[target] = vote_scores.get(target, 0) + sim
+            # Sort individuals by accumulated score
+            sorted_ids = sorted(vote_scores.items(), key=lambda x: x[1], reverse=True)
+            pred_all = [le_individual_id.classes_[item[0]] for item in sorted_ids]
+        else:
+            # Baseline: top1 logic (original 0.3 score logic)
+            pred_all = le_individual_id.inverse_transform(train_targets[indices]).tolist()
+        
+        # Threshold logic (direction: distance >= th -> new_individual first)
+        if top1_dist[i] < args.th:
             pred = [pred_all[0], "new_individual"]
         else:
             pred = ["new_individual", pred_all[0]]
-        for i in range(len(pred_all)):
-            if len(pred) == 5:
+            
+        # Fill to top5 without duplicates
+        for p in pred_all:
+            if len(pred) >= 5:
                 break
-            else:
-                if pred_all[i] not in pred:
-                    pred.append(pred_all[i])
+            if p not in pred:
+                pred.append(p)
+        
+        while len(pred) < 5:
+            pred.append("new_individual")
+            
+        predictions_map[test_indices[i]] = " ".join(pred[:5])
 
-        topk.append(pred[:5])
-    topk = np.array(topk)
-    df = pd.read_csv(root / "sample_submission.csv")
-    pred = []
-    for i in range(len(topk)):
-        pred.append(" ".join(topk[i]))
-
-    df["predictions"] = pred
-    df.to_csv(args.out, index=False)
-    print(df.head())
-    print(
-        "new individual ratio",
-        (df["predictions"].map(lambda x: x.split()[0]) == "new_individual").mean(),
-    )
+    print("Saving submission...")
+    sub_df = pd.read_csv(root / "sample_submission.csv")
+    final_preds = []
+    missing = 0
+    for i in range(len(sub_df)):
+        if i in predictions_map:
+            final_preds.append(predictions_map[i])
+        else:
+            final_preds.append("new_individual")
+            missing += 1
+            
+    sub_df["predictions"] = final_preds
+    sub_df.to_csv(args.out, index=False)
+    
+    if missing > 0:
+        print(f"[WARN] {missing} samples missing from test embeddings, filled with 'new_individual'")
+    
+    print(f"Submission saved to {args.out}")
+    print(sub_df.head())
 
 
 if __name__ == "__main__":
