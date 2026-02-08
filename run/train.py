@@ -9,7 +9,22 @@ import omegaconf
 import torch
 
 if hasattr(torch.serialization, "add_safe_globals"):
-    torch.serialization.add_safe_globals([omegaconf.dictconfig.DictConfig, omegaconf.listconfig.ListConfig])
+    import omegaconf.base
+    import omegaconf.dictconfig
+    import omegaconf.listconfig
+    import omegaconf.nodes
+    torch.serialization.add_safe_globals([
+        omegaconf.dictconfig.DictConfig, 
+        omegaconf.listconfig.ListConfig,
+        omegaconf.base.ContainerMetadata,
+        omegaconf.base.Metadata,
+        omegaconf.nodes.AnyNode,
+        omegaconf.nodes.EnumNode,
+        omegaconf.nodes.IntegerNode,
+        omegaconf.nodes.FloatNode,
+        omegaconf.nodes.StringNode,
+        omegaconf.nodes.BooleanNode,
+    ])
 
 from omegaconf import DictConfig
 from pytorch_lightning import Trainer, seed_everything
