@@ -7,10 +7,11 @@ import torch.nn as nn
 from pathlib import Path
 from tqdm import tqdm
 import cv2
-from omegaconf import OmegaConf
+import argparse
+import hydra
+from hydra import initialize, compose
 from run.pl_model import PLModel
 from run.init.preprocessing import Preprocessing
-from src.datasets.wrapper import WrapperDataset
 
 def l2_normalize(x):
     return x / (np.linalg.norm(x, axis=1, keepdims=True) + 1e-12)
@@ -18,22 +19,24 @@ def l2_normalize(x):
 @torch.inference_mode()
 def extract_feature_from_crop(img, model, preprocessing, device):
     transform = preprocessing.get_test_transform()
-    # Manual preprocessing for a single crop
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     transformed = transform(image=img_rgb)["image"]
     batch = transformed.unsqueeze(0).to(device)
-    
-    # Forward through model features
-    features = model.model.forward_features(batch)
-    # The output of forward_features is already the embedding in this project's PLModel
+    # Correct path to model features in this repo
+    features = model.forwarder.model.forward_features(batch)
     return features.cpu().numpy()
 
-def refine_bboxes(multi_box_json, train_embed_path, output_csv, model_cfg_path, ckpt_path):
+def refine_bboxes(phase, train_embed_path, ckpt_path):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    ROOT_DIR = Path(__file__).parent.parent.absolute()
+    DATA_DIR = ROOT_DIR / "happywhale_data"
     
-    # 1. Load model and preprocessing
+    # 1. Config and Model loading
+    print(f"Loading full configuration via Hydra for {phase}...")
+    with initialize(config_path="../run/conf", version_base=None):
+        cfg = compose(config_name="config_effb0")
+    
     print("Loading model for feature extraction...")
-    cfg = OmegaConf.load(model_cfg_path)
     model = PLModel(cfg)
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     model.load_state_dict(ckpt["state_dict"])
@@ -42,91 +45,123 @@ def refine_bboxes(multi_box_json, train_embed_path, output_csv, model_cfg_path, 
     
     preprocessing = Preprocessing(cfg.augmentation, **cfg.preprocessing)
     
-    # 2. Load reference train embeddings
-    print("Loading reference train embeddings...")
+    # 2. Reference embeddings
+    print(f"Loading reference train embeddings from {train_embed_path}...")
     train_data = np.load(train_embed_path)
     train_feat = l2_normalize(train_data["embed_features1"])
     
-    # 3. Load multi-box inference results
+    # 3. Input selection
+    multi_box_json = DATA_DIR / f"{phase}_multi_boxes.json"
+    images_dir = DATA_DIR / f"{phase}_images"
+    output_csv = DATA_DIR / f"{phase}_backfin_refined.csv"
+    
+    if not multi_box_json.exists():
+        raise FileNotFoundError(f"Missing input multi-box JSON: {multi_box_json}")
+
     with open(multi_box_json, 'r') as f:
         multi_boxes = json.load(f)
     
-    images_dir = Path("happywhale_data/test_images")
     refined_results = []
 
-    print("Refining bboxes based on similarity...")
+    print(f"Refining bboxes for {phase} based on similarity...")
     for img_name, boxes in tqdm(multi_boxes.items()):
         img_path = images_dir / img_name
+        
+        # Branch 1: No detection
         if not img_path.exists() or len(boxes) == 0:
-            refined_results.append({"image": img_name, "bbox": "[]", "conf": "[]"})
+            refined_results.append({"image": img_name, "bbox": "[]", "conf": "[]", "min_dist": 1.0})
             continue
             
-        if len(boxes) == 1:
-            box = boxes[0]
-            bbox_str = f"[[{int(box['bbox'][0])} {int(box['bbox'][1])} {int(box['bbox'][2])} {int(box['bbox'][3])}]]"
-            conf_str = f"[{box['conf']:.4f}]"
-            refined_results.append({"image": img_name, "bbox": bbox_str, "conf": conf_str})
-            continue
-
-        # Handle multiple boxes
         img_bgr = cv2.imread(str(img_path))
         if img_bgr is None:
-            refined_results.append({"image": img_name, "bbox": "[]", "conf": "[]"})
+            refined_results.append({"image": img_name, "bbox": "[]", "conf": "[]", "min_dist": 1.0})
             continue
-            
+
         box_features = []
+        valid_boxes = []
         for box in boxes:
             xmin, ymin, xmax, ymax = map(int, box["bbox"])
-            crop = img_bgr[max(0, ymin):ymax, max(0, xmin):xmax]
-            if crop.size == 0:
-                feat = np.zeros((1, train_feat.shape[1]))
-            else:
-                feat = extract_feature_from_crop(crop, model, preprocessing, device)
-            box_features.append(l2_normalize(feat))
+            # Clamp to image bounds
+            h, w = img_bgr.shape[:2]
+            xmin, ymin = max(0, xmin), max(0, ymin)
+            xmax, ymax = min(w, xmax), min(h, ymax)
             
-        box_features = np.vstack(box_features) # (num_boxes, dim)
+            crop = img_bgr[ymin:ymax, xmin:xmax]
+            if crop.size == 0:
+                continue
+            
+            feat = extract_feature_from_crop(crop, model, preprocessing, device)
+            box_features.append(l2_normalize(feat))
+            valid_boxes.append(box)
+            
+        if not box_features:
+            refined_results.append({"image": img_name, "bbox": "[]", "conf": "[]", "min_dist": 1.0})
+            continue
+
+        box_features = np.vstack(box_features)
         
-        # Calculate cosine distances to all train samples
-        # distance = 1 - cosine_similarity
-        distances = 1.0 - np.dot(box_features, train_feat.T) # (num_boxes, num_train)
-        min_distances = np.min(distances, axis=1) # (num_boxes,)
+        # Similarity measure
+        similarities = np.dot(box_features, train_feat.T) 
+        max_similarities = np.max(similarities, axis=1) 
+        min_distances = 1.0 - max_similarities 
         
         best_idx = 0
-        min_dist = np.min(min_distances)
+        global_min_dist = np.min(min_distances)
         
-        if min_dist > 0.5:
-            # If distance > 0.5, choose the box with overall minimum distance
-            best_idx = np.argmin(min_distances)
+        # Logic: If only one valid box, use it
+        if len(valid_boxes) == 1:
+            best_idx = 0
+        # Logic: Multi-box decision
+        elif global_min_dist > 0.5:
+            best_idx = np.argmin(min_distances) # Choose most similar
         else:
-            # If distance < 0.5, choose the box with highest detection score
-            # Filter boxes that have dist < 0.5
             valid_indices = np.where(min_distances < 0.5)[0]
-            scores = [boxes[i]["conf"] for i in valid_indices]
-            best_idx = valid_indices[np.argmax(scores)]
+            scores = [valid_boxes[i]["conf"] for i in valid_indices]
+            best_idx = valid_indices[np.argmax(scores)] # Choose highest score among similar ones
             
-        best_box = boxes[best_idx]
+        best_box = valid_boxes[best_idx]
         bbox_str = f"[[{int(best_box['bbox'][0])} {int(best_box['bbox'][1])} {int(best_box['bbox'][2])} {int(best_box['bbox'][3])}]]"
         conf_str = f"[{best_box['conf']:.4f}]"
-        refined_results.append({"image": img_name, "bbox": bbox_str, "conf": conf_str})
+        refined_results.append({"image": img_name, "bbox": bbox_str, "conf": conf_str, "min_dist": global_min_dist})
 
-    # Save to CSV
+    # Save outputs
     df_refined = pd.DataFrame(refined_results)
-    # Merge with original sample_submission to keep all images
-    sub_df = pd.read_csv("happywhale_data/sample_submission.csv")
-    final_df = pd.merge(sub_df[['image']], df_refined, on='image', how='left')
+    
+    # Anomaly report
+    no_box_samples = df_refined[df_refined['bbox'] == '[]']
+    high_dist_samples = df_refined[df_refined['min_dist'] > 0.7]
+    report_path = DATA_DIR / f"{phase}_refinement_anomaly_report.csv"
+    pd.concat([no_box_samples, high_dist_samples]).to_csv(report_path, index=False)
+    print(f"Anomaly report saved to {report_path}")
+
+    # Standard CSV for project
+    if phase == "train":
+        # Keep metadata if possible
+        orig_csv = DATA_DIR / "train.csv"
+        if orig_csv.exists():
+            df_orig = pd.read_csv(orig_csv)
+            # Remove existing columns if merging
+            df_orig = df_orig.drop(columns=['bbox', 'conf'], errors='ignore')
+            final_df = pd.merge(df_orig, df_refined[['image', 'bbox', 'conf']], on='image', how='left')
+        else:
+            final_df = df_refined[['image', 'bbox', 'conf']]
+    else:
+        orig_csv = DATA_DIR / "sample_submission.csv"
+        df_orig = pd.read_csv(orig_csv)
+        final_df = pd.merge(df_orig[['image']], df_refined[['image', 'bbox', 'conf']], on='image', how='left')
+
     final_df.to_csv(output_csv, index=False)
-    print(f"Saved refined bboxes to {output_csv}")
+    print(f"Final refined CSV saved to {output_csv}")
 
 if __name__ == "__main__":
-    # This script requires:
-    # 1. test_multi_boxes.json (from yolo_inference_multi_boxes.py)
-    # 2. concat_train.npz (or body_train.npz)
-    # 3. A trained model ckpt for feature extraction
-    
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--phase", type=str, default="test", choices=["train", "test"])
+    parser.add_argument("--train_embed", type=str, default="outputs/emb/body_ref_train.npz")
+    parser.add_argument("--ckpt", type=str, default="outputs/body_b0_for_refinement/checkpoints/last.ckpt")
+    args = parser.parse_args()
+
     refine_bboxes(
-        multi_box_json="happywhale_data/test_multi_boxes.json",
-        train_embed_path="outputs/emb/concat_train.npz",
-        output_csv="happywhale_data/test_backfin_refined.csv",
-        model_cfg_path="run/conf/config_effb0.yaml", # Use the same cfg as the ckpt
-        ckpt_path="G:/whale/kaggle-happywhale-1st-place-solution-charmq/outputs/body_effb0/checkpoints/epoch=3-step=5104.ckpt" # Update to your best body ckpt
+        phase=args.phase,
+        train_embed_path=args.train_embed,
+        ckpt_path=args.ckpt
     )
