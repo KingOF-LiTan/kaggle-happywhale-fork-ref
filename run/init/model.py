@@ -10,6 +10,7 @@ from src.datasets.happy_whale import HappyWhaleDataset
 from src.nn.backbone import load_backbone
 from src.nn.backbones.base import BackboneBase
 from src.nn.heads.arc_face import ArcAdaptiveMarginProduct, ChannelWiseGeM, GeM
+from src.nn.heads.curricular_face import CurricularFace
 from src.utils.checkpoint import get_weights_to_load
 
 logger = getLogger(__name__)
@@ -114,6 +115,67 @@ def init_model_from_config(cfg: DictConfig, pretrained: bool):
             s=cfg.head.s_species,
             k=cfg.head.k_species,
             initialization=cfg.head.init_species,
+        )
+        model.add_module("head_species", head_species)
+
+    elif cfg.head.type == "curricularface":
+        def get_forward_features():
+            backbone = init_backbone(cfg, pretrained=pretrained)
+            forward_features = nn.Sequential()
+            forward_features.add_module("backbone", backbone)
+            if cfg.pool.type == "adaptive":
+                forward_features.add_module("pool", nn.AdaptiveAvgPool2d((1, 1)))
+                forward_features.add_module("flatten", nn.Flatten())
+            elif cfg.pool.type == "gem":
+                forward_features.add_module(
+                    "pool", GeM(p=cfg.pool.p, p_trainable=cfg.pool.p_trainable)
+                )
+                forward_features.add_module("flatten", nn.Flatten())
+            elif cfg.pool.type == "gem_ch":
+                forward_features.add_module(
+                    "pool",
+                    ChannelWiseGeM(
+                        dim=backbone.out_features,
+                        p=cfg.pool.p,
+                        requires_grad=cfg.pool.p_trainable,
+                    ),
+                )
+                forward_features.add_module("flatten", nn.Flatten())
+
+            embedding_size = backbone.out_features
+            if cfg.embedding_size > 0:
+                embedding_size = cfg.embedding_size
+                forward_features.add_module(
+                    "linear",
+                    nn.Linear(backbone.out_features, embedding_size, bias=True),
+                )
+            if cfg.use_bn:
+                forward_features.add_module("normalize", nn.BatchNorm1d(embedding_size))
+                forward_features.add_module("relu", torch.nn.PReLU())
+            return forward_features, embedding_size
+
+        forward_features, embedding_size = get_forward_features()
+        model.add_module("forward_features", forward_features)
+        if cfg.backbone2:
+            forward_features2, embedding_size2 = get_forward_features()
+            model.add_module("forward_features2", forward_features2)
+        else:
+            embedding_size2 = 0
+
+        head = CurricularFace(
+            embedding_size + embedding_size2,
+            cfg.output_dim,
+            s=cfg.head.s,
+            m=cfg.head.m,
+        )
+        model.add_module("head", head)
+        
+        # We still need a head_species for the code to run correctly
+        head_species = CurricularFace(
+            embedding_size + embedding_size2,
+            cfg.output_dim_species,
+            s=cfg.head.s_species if hasattr(cfg.head, 's_species') else 30.0,
+            m=cfg.head.m,
         )
         model.add_module("head_species", head_species)
 

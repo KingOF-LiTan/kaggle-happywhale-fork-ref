@@ -155,8 +155,21 @@ cython_debug/
 # --- HappyWhale Project Specific ---
 happywhale_data/train_images/
 happywhale_data/test_images/
+happywhale_data/cropped/
+*.rar
+*.zip
+*.7z
 outputs/
 wandb/
 *.npy
 !run/conf/*.csv
 !src/datasets/*.csv
+# YOLO data and results
+happywhale_data/yolo_backfin/
+runs/
+*.pt
+
+# Visualization and temporary tools
+happywhale_data/yolo_backfin/vis/
+tools/backfin_annotations.xlsx
+tools/yolov8n.pt
