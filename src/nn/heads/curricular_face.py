@@ -32,21 +32,23 @@ class CurricularFace(nn.Module):
         phi = cosine * cos_m - sine * sin_m
         phi = torch.where(cosine > threshold, phi, cosine - mm)
 
-        output = cosine * 1.0  # make copy
-        batch_size = input.size(0)
-        
-        # Target logit
-        target_logit = output[torch.arange(batch_size), label]
-        
         if self.training:
+            batch_size = input.size(0)
+            target_logit = cosine[torch.arange(batch_size), label]
+            
             with torch.no_grad():
                 self.t = target_logit.mean() * 0.01 + (1 - 0.01) * self.t
             
-            # Hard sample mining
+            # Hard sample mining: boost non-target logits that are "harder" than target
             mask = cosine > target_logit.unsqueeze(1)
-            # Ensure self.t is same dtype
             cosine[mask] = cosine[mask] * (self.t.to(input.dtype) + cosine[mask])
             
-        output.scatter_(1, label.unsqueeze(1), phi.unsqueeze(1).to(output.dtype))
+        # Standard large margin construction
+        one_hot = torch.zeros_like(cosine)
+        one_hot.scatter_(1, label.view(-1, 1).long(), 1)
+        
+        output = (one_hot * phi.to(cosine.dtype)) + ((1.0 - one_hot) * cosine)
         output *= self.s
-        return output
+        
+        # Return both marginal logits and original cosine for Forwarder compatibility
+        return output, cosine
