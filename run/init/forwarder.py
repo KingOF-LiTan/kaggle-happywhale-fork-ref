@@ -21,6 +21,21 @@ class Forwarder(nn.Module):
         self.head_species = cfg.head.head_species
         self.backbone2 = cfg.backbone2
         self.input_species = cfg.species_embedding_size > 0
+        self.mixup_alpha = cfg.get("mixup_alpha", 0.0)
+
+    def mixup_data(self, x, y, y_species, alpha=1.0):
+        if alpha > 0:
+            lam = np.random.beta(alpha, alpha)
+        else:
+            lam = 1
+
+        batch_size = x.size()[0]
+        index = torch.randperm(batch_size).to(x.device)
+
+        mixed_x = lam * x + (1 - lam) * x[index, :]
+        y_a, y_b = y, y[index]
+        y_s_a, y_s_b = y_species, y_species[index]
+        return mixed_x, y_a, y_b, y_s_a, y_s_b, lam
 
     def loss(
         self,
@@ -32,10 +47,21 @@ class Forwarder(nn.Module):
         logits_species=None,
         species_label=None,
         epoch=None,
+        labels_b=None,
+        species_label_b=None,
+        lam=None,
     ) -> Tensor:
-        loss = F.cross_entropy(logits_margin, labels, reduction="none")  # (B, C)
-        if logits_species is not None:
-            loss += F.cross_entropy(logits_species, species_label, reduction="none")
+        if lam is not None:
+            loss = lam * F.cross_entropy(logits_margin, labels, reduction="none") + \
+                   (1 - lam) * F.cross_entropy(logits_margin, labels_b, reduction="none")
+            if logits_species is not None:
+                loss += lam * F.cross_entropy(logits_species, species_label, reduction="none") + \
+                        (1 - lam) * F.cross_entropy(logits_species, species_label_b, reduction="none")
+        else:
+            loss = F.cross_entropy(logits_margin, labels, reduction="none")  # (B, C)
+            if logits_species is not None:
+                loss += F.cross_entropy(logits_species, species_label, reduction="none")
+        
         if mean:
             return torch.mean(loss)
         else:
@@ -55,15 +81,27 @@ class Forwarder(nn.Module):
         labels = batch["label"]
         species_label = batch["label_species"]
 
+        lam = None
+        labels_b = None
+        species_label_b = None
+
         if phase == "train":
+            if self.mixup_alpha > 0 and np.random.random() > 0.5:
+                inputs, labels, labels_b, species_label, species_label_b, lam = self.mixup_data(
+                    inputs, labels, species_label, self.mixup_alpha
+                )
+
             with torch.set_grad_enabled(True):
                 embed_features = self.model.forward_features(inputs)
                 if self.backbone2:
+                    # Note: backbone2 currently doesn't support mixup directly in this simple implementation
                     embed_features2 = self.model.forward_features2(inputs2)
                     embed_features = torch.cat([embed_features, embed_features2], dim=1)
                 if self.input_species:
+                    # Use primary species label for embedding if mixed
                     embed_species = self.model.species_embedding(species_label)
                     embed_features = torch.cat([embed_features, embed_species], dim=1)
+                
                 logits_margin, logits = self.model.head(embed_features, labels)
                 if self.head_species:
                     logits_species_margin, logits_species = self.model.head_species(
@@ -74,6 +112,7 @@ class Forwarder(nn.Module):
                     logits_species_margin = None
                 embed_features1 = embed_features
                 embed_features2 = embed_features
+            
             loss = self.loss(
                 logits_margin=logits_margin,
                 labels=labels,
@@ -82,6 +121,9 @@ class Forwarder(nn.Module):
                 logits_species=logits_species_margin,
                 species_label=species_label,
                 epoch=epoch,
+                labels_b=labels_b,
+                species_label_b=species_label_b,
+                lam=lam,
             )
         else:
             if phase == "test":
