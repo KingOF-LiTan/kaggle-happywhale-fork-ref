@@ -318,7 +318,9 @@ class HappyWhaleDataset(Dataset):
     def get_file_name(self, index: int, phase: str = "train") -> str:
         image_id = self.df.loc[index, "image"]
         if self.crop is not None:
-            return f"cropped/cropped_{self.crop}_{phase}_images/{image_id}"
+            # 适配 offline_crop.py 生成的目录名格式: {type}_{phase}_{size}
+            # 默认使用 512 分辨率的目录
+            return f"cropped/{self.crop}_{phase}_512/{image_id}"
 
         return f"{phase}_images/{image_id}"
 
