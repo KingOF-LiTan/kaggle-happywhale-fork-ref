@@ -19,7 +19,10 @@ def parse_conf(x):
     except:
         return 0.0
 
-def ensemble_csvs(file_paths, output_path):
+def ensemble_csvs(file_paths, output_path, missing_species=None):
+    if missing_species is None:
+        missing_species = []
+    
     dfs = []
     for name, path in file_paths.items():
         if Path(path).exists():
@@ -30,38 +33,46 @@ def ensemble_csvs(file_paths, output_path):
         else:
             print(f"Warning: {path} not found, skipping.")
 
-    if not dfs:
-        print("No files to ensemble.")
-        return
+    if not dfs: return
 
-    # Use the first DF as base for images list
+    # Load species metadata from train.csv to handle missing species
+    train_meta = pd.read_csv("happywhale_data/train.csv")[['image', 'species']]
+    species_map = train_meta.set_index('image')['species'].to_dict()
+
     base_df = dfs[0].copy()
     all_images = base_df['image'].unique()
-    
-    final_rows = []
-    
-    # Create a map for quick lookup
     lookup = {name: df.set_index('image') for name, df in zip(file_paths.keys(), dfs)}
 
-    print(f"Ensembling {len(all_images)} images...")
+    final_rows = []
+    print(f"Ensembling {len(all_images)} images with species-aware logic...")
     for img in tqdm(all_images):
+        species = species_map.get(img, "unknown")
         best_conf = -1.0
         best_row = None
         
-        for name in file_paths.keys():
-            if name in lookup and img in lookup[name].index:
-                row = lookup[name].loc[img]
-                # If multiple rows for same image (shouldn't happen with our logic), take the first
-                if isinstance(row, pd.DataFrame):
-                    row = row.iloc[0]
-                
-                conf = row['parsed_conf']
-                if conf > best_conf:
-                    best_conf = conf
-                    best_row = row
+        # 1. If species is missing in our training, prefer Original/Charm directly
+        if species in missing_species:
+            for name in ["Original", "Charm"]:
+                if name in lookup and img in lookup[name].index:
+                    row = lookup[name].loc[img]
+                    if isinstance(row, pd.DataFrame): row = row.iloc[0]
+                    conf = row['parsed_conf']
+                    if conf > best_conf:
+                        best_conf = conf
+                        best_row = row
+        
+        # 2. Otherwise (or if fallback failed), use standard highest confidence
+        if best_row is None:
+            for name in file_paths.keys():
+                if name in lookup and img in lookup[name].index:
+                    row = lookup[name].loc[img]
+                    if isinstance(row, pd.DataFrame): row = row.iloc[0]
+                    conf = row['parsed_conf']
+                    if conf > best_conf:
+                        best_conf = conf
+                        best_row = row
         
         if best_row is not None:
-            # Clean up temporary columns
             res_dict = best_row.to_dict()
             res_dict.pop('src_name', None)
             res_dict.pop('parsed_conf', None)
@@ -69,26 +80,23 @@ def ensemble_csvs(file_paths, output_path):
             final_rows.append(res_dict)
 
     df_final = pd.DataFrame(final_rows)
-    # Ensure columns match original order as much as possible
     cols = [c for c in base_df.columns if c not in ['src_name', 'parsed_conf']]
-    df_final = df_final[cols]
-    
-    df_final.to_csv(output_path, index=False)
-    print(f"Saved ensembled CSV to {output_path}")
+    df_final[cols].to_csv(output_path, index=False)
+    print(f"Saved species-aware ensembled CSV to {output_path}")
 
 if __name__ == "__main__":
+    MISSING = ['gray_whale', 'beluga', 'southern_right_whale']
     # Train set
     train_files = {
         "Original": "happywhale_data/train_backfin.csv",
         "Charm": "happywhale_data/backfin_train_charm.csv",
         "YOLOv8n": "happywhale_data/train_backfin_yolov8.csv"
     }
-    ensemble_csvs(train_files, "happywhale_data/train_backfin_ensembled.csv")
-
-    # Test set
+    ensemble_csvs(train_files, "happywhale_data/train_backfin_ensembled.csv", missing_species=MISSING)
+    # Test set (Assume similar missing species distribution in test)
     test_files = {
         "Original": "happywhale_data/test_backfin.csv",
         "Charm": "happywhale_data/backfin_test_charm.csv",
         "YOLOv8n": "happywhale_data/test_backfin_yolov8.csv"
     }
-    ensemble_csvs(test_files, "happywhale_data/test_backfin_ensembled.csv")
+    ensemble_csvs(test_files, "happywhale_data/test_backfin_ensembled.csv", missing_species=MISSING)
