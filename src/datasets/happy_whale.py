@@ -336,7 +336,7 @@ class HappyWhaleDataset(Dataset):
         x = imageio.imread(root / file_name)
         x = np.asarray(x)
 
-        if self.bbox is not None:
+        if self.bbox is not None and self.crop is None:
             crop_margin = self.crop_margin
             CONF = 0.01
             if self.crop_aug:
@@ -378,7 +378,12 @@ class HappyWhaleDataset(Dataset):
                 xmax = int(min(xmax, size_x))
                 ymin = int(max(0, ymin))
                 ymax = int(min(ymax, size_y))
-                image = x[ymin:ymax, xmin:xmax]
+                
+                # 修复：增加安全检查，防止切出空图像
+                if ymax > ymin and xmax > xmin:
+                    image = x[ymin:ymax, xmin:xmax]
+                else:
+                    image = x.copy()
             else:
                 image = x.copy()
         else:
