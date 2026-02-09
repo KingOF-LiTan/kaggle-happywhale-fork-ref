@@ -1,3 +1,4 @@
+import sys
 import os
 import pandas as pd
 import numpy as np
@@ -8,24 +9,30 @@ from pathlib import Path
 from tqdm import tqdm
 import cv2
 from omegaconf import OmegaConf
+
+# 1. 确保能找到项目根目录下的 run 模块
+root_dir = Path(__file__).resolve().parent.parent
+if str(root_dir) not in sys.path:
+    sys.path.insert(0, str(root_dir))
+
 from run.pl_model import PLModel
 from run.init.preprocessing import Preprocessing
 from src.datasets.wrapper import WrapperDataset
 
 def l2_normalize(x):
+    # ... (保持原样)
     return x / (np.linalg.norm(x, axis=1, keepdims=True) + 1e-12)
 
 @torch.inference_mode()
 def extract_feature_from_crop(img, model, preprocessing, device):
     transform = preprocessing.get_test_transform()
-    # Manual preprocessing for a single crop
+    # 单张 crop 的预处理
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     transformed = transform(image=img_rgb)["image"]
     batch = transformed.unsqueeze(0).to(device)
-    
-    # Forward through model features
-    features = model.model.forward_features(batch)
-    # The output of forward_features is already the embedding in this project's PLModel
+
+    # 通过模型的 forward_features 提取特征
+    features = model.forwarder.model.forward_features(batch)
     return features.cpu().numpy()
 
 def refine_bboxes(multi_box_json, train_embed_path, output_csv, model_cfg_path, ckpt_path):
@@ -33,8 +40,34 @@ def refine_bboxes(multi_box_json, train_embed_path, output_csv, model_cfg_path, 
     
     # 1. Load model and preprocessing
     print("Loading model for feature extraction...")
-    cfg = OmegaConf.load(model_cfg_path)
+    
+    from hydra import compose, initialize
+    from hydra.core.global_hydra import GlobalHydra
+    
+    if GlobalHydra.instance().is_initialized():
+        GlobalHydra.instance().clear()
+    
+    # 指向真实的配置目录：kaggle-happywhale-fork-ref/run/conf
+    config_dir = "../run/conf"
+    config_name = Path(model_cfg_path).stem # 获取 config_effb0
+        
+    with initialize(version_base=None, config_path=config_dir):
+        # 1. 先加载主配置
+        cfg = compose(config_name=config_name)
+        
+        # 2. 手动加载 dataset 配置组以解决插值失败问题
+        dataset_yaml = root_dir / "run/conf/dataset/happy_whale.yaml"
+        if dataset_yaml.exists():
+            print(f"Manually merging dataset config from {dataset_yaml}")
+            # 重要：解除结构限制，允许注入 dataset 下的字段
+            OmegaConf.set_struct(cfg, False)
+            dataset_cfg = OmegaConf.load(dataset_yaml)
+            cfg = OmegaConf.merge(cfg, {"dataset": dataset_cfg})
+        else:
+            print(f"Warning: dataset config not found at {dataset_yaml}")
+    
     model = PLModel(cfg)
+    # ... (后续加载 ckpt 逻辑保持不变)
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     model.load_state_dict(ckpt["state_dict"])
     model.to(device)
@@ -125,8 +158,8 @@ if __name__ == "__main__":
     
     refine_bboxes(
         multi_box_json="happywhale_data/test_multi_boxes.json",
-        train_embed_path="outputs/emb/concat_train.npz",
+        train_embed_path="/root/autodl-tmp/kaggle-happywhale-fork-ref/outputs/emb/body_ref_train.npz",
         output_csv="happywhale_data/test_backfin_refined.csv",
         model_cfg_path="run/conf/config_effb0.yaml", # Use the same cfg as the ckpt
-        ckpt_path="G:/whale/kaggle-happywhale-1st-place-solution-charmq/outputs/body_effb0/checkpoints/epoch=3-step=5104.ckpt" # Update to your best body ckpt
+        ckpt_path="/root/autodl-tmp/kaggle-happywhale-fork-ref/outputs/body_b0_for_refinement/checkpoints/last.ckpt" # Update to your best body ckpt
     )
