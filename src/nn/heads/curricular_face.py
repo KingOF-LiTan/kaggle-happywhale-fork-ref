@@ -22,8 +22,15 @@ class CurricularFace(nn.Module):
         # cos(theta) & phi(theta)
         cosine = F.linear(F.normalize(input), F.normalize(self.weight))
         sine = torch.sqrt((1.0 - torch.pow(cosine, 2)).clamp(0, 1))
-        phi = cosine * self.cos_m - sine * self.sin_m
-        phi = torch.where(cosine > self.threshold, phi, cosine - self.mm)
+        
+        # Ensure constants match input dtype for AMP compatibility
+        cos_m = self.cos_m
+        sin_m = self.sin_m
+        mm = self.mm
+        threshold = self.threshold
+        
+        phi = cosine * cos_m - sine * sin_m
+        phi = torch.where(cosine > threshold, phi, cosine - mm)
 
         output = cosine * 1.0  # make copy
         batch_size = input.size(0)
@@ -37,8 +44,9 @@ class CurricularFace(nn.Module):
             
             # Hard sample mining
             mask = cosine > target_logit.unsqueeze(1)
-            cosine[mask] = cosine[mask] * (self.t + cosine[mask])
+            # Ensure self.t is same dtype
+            cosine[mask] = cosine[mask] * (self.t.to(input.dtype) + cosine[mask])
             
-        output.scatter_(1, label.unsqueeze(1), phi.unsqueeze(1))
+        output.scatter_(1, label.unsqueeze(1), phi.unsqueeze(1).to(output.dtype))
         output *= self.s
         return output
