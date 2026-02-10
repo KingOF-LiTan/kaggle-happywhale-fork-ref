@@ -1,0 +1,29 @@
+fullbody
+B7 + 512px + MixUp + 锐化/灰度 + BN 冻结 + 30 Epoch
+python -m run.train --config-name config_effb0 \
+  model.base_model=tf_efficientnet_b7 \
+  preprocessing.h_resize_to=512 preprocessing.w_resize_to=512 \
+  training.batch_size=20 training.accumulate_grad_batches=4 \
+  training.epoch=30 \
+  training.num_workers=8 \
+  scheduler=cosine_warmup \
+  +augmentation.p_sharpen=0.3 augmentation.p_gray=0.2 \
+  +forwarder.mixup_alpha=0.5 \
+  dataset.bbox=null dataset.crop=fb \
+  +freeze_bn_stats=true \
+  out_dir=./outputs/body_b7_final_512
+
+
+  Backfin 路径 (鱼鳍局部精修)
+配置：B7 + 512px + CurricularFace + 禁用 MixUp + BN 冻结 + 35 Epoch。
+python -m run.train --config-name config_effb0 \
+  model.base_model=tf_efficientnet_b7 \
+  head.type=curricularface \
+  preprocessing.h_resize_to=512 preprocessing.w_resize_to=512 \
+  training.batch_size=20 training.accumulate_grad_batches=4 \
+  training.epoch=30 \
+  scheduler=cosine_warmup \
+  augmentation.p_shuffle=0.0 augmentation.p_posterize=0.0 \
+  dataset.bbox=null dataset.crop=backfin \
+  +freeze_bn_stats=true \
+  out_dir=./outputs/fin_b7_final_512

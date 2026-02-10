@@ -1,5 +1,5 @@
 from pathlib import Path
-
+from tqdm import tqdm
 import imageio
 import numpy as np
 import pandas as pd
@@ -311,6 +311,27 @@ class HappyWhaleDataset(Dataset):
             self.label_to_samples[label].append(i)
 
         self.label_names = list(self.label_to_samples.keys())
+
+        # New: Filter out images that don't exist on disk (especially for offline cropped datasets)
+        if self.crop is not None:
+            print(f"Checking file existence for crop type: {self.crop}...")
+            exists_mask = []
+            for i in tqdm(range(len(self.df)), desc="Filtering missing crops"):
+                file_path = self.root / self.get_file_name(i, self.phase)
+                exists_mask.append(file_path.exists())
+            
+            original_len = len(self.df)
+            self.df = self.df[exists_mask].reset_index(drop=True)
+            print(f"Filtered {original_len - len(self.df)} missing images. Remaining: {len(self.df)}")
+            
+            # Re-build label mapping after filtering
+            self.label_to_samples = {}
+            for i in range(len(self.df)):
+                label = self.df.at[i, "individual_id_label"]
+                if label not in self.label_to_samples:
+                    self.label_to_samples[label] = []
+                self.label_to_samples[label].append(i)
+            self.label_names = list(self.label_to_samples.keys())
 
     def __len__(self) -> int:
         return len(self.df)
