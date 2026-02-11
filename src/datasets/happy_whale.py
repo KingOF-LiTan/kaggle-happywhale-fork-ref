@@ -346,6 +346,13 @@ class HappyWhaleDataset(Dataset):
         return len(self.df)
 
     def get_file_name(self, index: int, phase: str = "train") -> str:
+        if "origin" in self.df.columns:
+            origin = self.df.loc[index, "origin"]
+            if origin == "test":
+                phase = "test"
+            elif origin == "train":
+                phase = "train"
+
         image_id = self.df.loc[index, "image"]
         # Map 'val' phase to 'train' directory structure as validation is a subset of train
         _phase = "train" if phase == "val" else phase

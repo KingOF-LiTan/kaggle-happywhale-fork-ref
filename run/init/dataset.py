@@ -67,13 +67,16 @@ def get_happy_whale_dataset(
             
         print(f"[DEBUG] Filtering with conf > {cfg.pseudo_label_conf}")
         df_pl = df_pl[df_pl["conf"] > cfg.pseudo_label_conf]
+        df_pl["origin"] = "test"
         print(f"[DEBUG] After filter, shape: {df_pl.shape}")
 
     if phase == "train":
-        train_df = df[(df["fold"] != val_fold) & (df["fold"] != test_fold)]
-
-        val_df = df[df["fold"] == val_fold]
-        test_df = df[df["fold"] == test_fold]
+        train_df = df[(df["fold"] != val_fold) & (df["fold"] != test_fold)].copy()
+        train_df["origin"] = "train"
+        val_df = df[df["fold"] == val_fold].copy()
+        val_df["origin"] = "train"
+        test_df = df[df["fold"] == test_fold].copy()
+        test_df["origin"] = "train"
         if cfg.pseudo_label_filename is not None:
             train_df = pd.concat([train_df, df_pl])
 
@@ -90,8 +93,10 @@ def get_happy_whale_dataset(
         test_dataset = HappyWhaleDataset(df, phase, cfg)
     elif phase == "all":
         if cfg.pseudo_label_filename is not None:
+            df["origin"] = "train"
             train_dataset = HappyWhaleDataset(pd.concat([df, df_pl]), "train", cfg)
         else:
+            df["origin"] = "train"
             train_dataset = HappyWhaleDataset(df, "train", cfg)
         val_dataset = HappyWhaleDataset(df[:100], "train", cfg)
         test_dataset = HappyWhaleDataset(df[:100], "train", cfg)
