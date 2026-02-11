@@ -12,7 +12,11 @@ import hydra
 from hydra import initialize, compose
 from run.pl_model import PLModel
 from run.init.preprocessing import Preprocessing
+<<<<<<< HEAD
 
+=======
+from omegaconf import OmegaConf
+>>>>>>> 9e087a31f532a9dbb9d08160cb98c36551b43bfc
 def l2_normalize(x):
     return x / (np.linalg.norm(x, axis=1, keepdims=True) + 1e-12)
 
@@ -32,9 +36,26 @@ def refine_bboxes(phase, train_embed_path, ckpt_path):
     DATA_DIR = ROOT_DIR / "happywhale_data"
     
     # 1. Config and Model loading
+<<<<<<< HEAD
     print(f"Loading full configuration via Hydra for {phase}...")
     with initialize(config_path="../run/conf", version_base=None):
         cfg = compose(config_name="config_effb0")
+=======
+    print(f"Loading config_effb0.yaml directly for {phase}...")
+    # 直接加载 yaml 避免 Hydra 复杂的插值依赖
+    cfg = OmegaConf.load("run/conf/config_effb0.yaml")
+    dataset_cfg = OmegaConf.load("run/conf/dataset/happy_whale.yaml")
+    
+    # 重要：解除结构限制，允许注入完整节点
+    OmegaConf.set_struct(cfg, False)
+    
+    # 补全 PLModel 初始化所需的完整 dataset 配置
+    cfg.dataset = dataset_cfg
+    
+    # 显式解析/覆盖模型中的插值字段
+    if "model" in cfg and "output_dim_species" in cfg.model:
+        cfg.model.output_dim_species = int(dataset_cfg.num_species_classes)
+>>>>>>> 9e087a31f532a9dbb9d08160cb98c36551b43bfc
     
     print("Loading model for feature extraction...")
     model = PLModel(cfg)
@@ -51,7 +72,11 @@ def refine_bboxes(phase, train_embed_path, ckpt_path):
     train_feat = l2_normalize(train_data["embed_features1"])
     
     # 3. Input selection
+<<<<<<< HEAD
     multi_box_json = DATA_DIR / f"{phase}_multi_boxes.json"
+=======
+    multi_box_json = DATA_DIR / f"{phase}_multi_boxes_merged.json"
+>>>>>>> 9e087a31f532a9dbb9d08160cb98c36551b43bfc
     images_dir = DATA_DIR / f"{phase}_images"
     output_csv = DATA_DIR / f"{phase}_backfin_refined.csv"
     

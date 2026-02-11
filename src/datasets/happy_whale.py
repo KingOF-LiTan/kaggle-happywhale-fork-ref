@@ -1,5 +1,5 @@
 from pathlib import Path
-
+from tqdm import tqdm
 import imageio
 import numpy as np
 import pandas as pd
@@ -42,14 +42,18 @@ class HappyWhaleDataset(Dataset):
                 ).iloc[df.index]
             else:
                 df = pd.read_csv(str(root / "pseudo_labels" / pseudo_label_filename))
-                df_fb = pd.read_csv(str(root / "fullbody_test.csv"))
-                df_fb_charm = pd.read_csv(str(root / "fullbody_test_charm.csv"))
-                df_bbox_yolo = pd.read_csv(str(root / "test_bbox.csv"))
-                df_bbox_detic = pd.read_csv(str(root / "test2.csv"))
-                df_bbox_backfin = pd.read_csv(str(root / "test_backfin.csv"))
-                df_bbox_backfin_charm = pd.read_csv(
-                    str(root / "backfin_test_charm.csv")
-                )
+                
+                # Align aux DataFrames to df by image ID
+                def load_aligned(filename):
+                    print(f"[DEBUG] Loading aligned {filename}...")
+                    return pd.read_csv(str(root / filename)).set_index("image").loc[df["image"]].reset_index(drop=True)
+
+                df_fb = load_aligned("fullbody_test.csv")
+                df_fb_charm = load_aligned("fullbody_test_charm.csv")
+                df_bbox_yolo = load_aligned("test_bbox.csv")
+                df_bbox_detic = load_aligned("test2.csv")
+                df_bbox_backfin = load_aligned("test_backfin.csv")
+                df_bbox_backfin_charm = load_aligned("backfin_test_charm.csv")
             df["bbox_fb"] = df_fb["bbox"].map(
                 lambda x: [list(map(int, x[2:-2].split()))]
                 if isinstance(x, str)
@@ -312,17 +316,46 @@ class HappyWhaleDataset(Dataset):
 
         self.label_names = list(self.label_to_samples.keys())
 
+        # New: Filter out images that don't exist on disk (especially for offline cropped datasets)
+        if self.crop is not None:
+            print(f"Checking file existence for crop type: {self.crop}...")
+            exists_mask = []
+            for i in tqdm(range(len(self.df)), desc="Filtering missing crops"):
+                file_path = self.root / self.get_file_name(i)
+                exists_mask.append(file_path.exists())
+            
+            original_len = len(self.df)
+            if original_len > 0 and not any(exists_mask):
+                # Debug info if everything is filtered
+                sample_path = self.root / self.get_file_name(0)
+                print(f"ERROR: All images filtered! Sample path checked: {sample_path}")
+            
+            self.df = self.df[exists_mask].reset_index(drop=True)
+            print(f"Filtered {original_len - len(self.df)} missing images. Remaining: {len(self.df)}")
+            
+            # Re-build label mapping after filtering
+            self.label_to_samples = {}
+            for i in range(len(self.df)):
+                label = self.df.at[i, "individual_id_label"]
+                if label not in self.label_to_samples:
+                    self.label_to_samples[label] = []
+                self.label_to_samples[label].append(i)
+            self.label_names = list(self.label_to_samples.keys())
+
     def __len__(self) -> int:
         return len(self.df)
 
     def get_file_name(self, index: int, phase: str = "train") -> str:
         image_id = self.df.loc[index, "image"]
+        # Map 'val' phase to 'train' directory structure as validation is a subset of train
+        _phase = "train" if phase == "val" else phase
+        
         if self.crop is not None:
             # 适配 offline_crop.py 生成的目录名格式: {type}_{phase}_{size}
             # 默认使用 512 分辨率的目录
-            return f"cropped/{self.crop}_{phase}_512/{image_id}"
+            return f"cropped/{self.crop}_{_phase}_512/{image_id}"
 
-        return f"{phase}_images/{image_id}"
+        return f"{_phase}_images/{image_id}"
 
     def __getitem__(self, index: int):
 
@@ -357,6 +390,16 @@ class HappyWhaleDataset(Dataset):
                 ]
             else:
                 bbox_type = self.bbox
+            
+            # Species Protection Logic
+            species = self.df.at[index, "species"]
+            protected_species = ['gray_whale', 'beluga', 'southern_right_whale']
+            if species in protected_species:
+                if bbox_type == 'backfin':
+                    bbox_type = 'fb'
+                elif bbox_type == 'backfin_charm':
+                    bbox_type = 'fb_charm'
+
             if bbox_type == "none":
                 bbox = []
                 conf = 0
@@ -410,6 +453,16 @@ class HappyWhaleDataset(Dataset):
                 ]
             else:
                 bbox_type2 = self.bbox2
+            
+            # Species Protection Logic for bbox2
+            species = self.df.at[index, "species"]
+            protected_species = ['gray_whale', 'beluga', 'southern_right_whale']
+            if species in protected_species:
+                if bbox_type2 == 'backfin':
+                    bbox_type2 = 'fb'
+                elif bbox_type2 == 'backfin_charm':
+                    bbox_type2 = 'fb_charm'
+
             if bbox_type2 == "none":
                 bbox = []
                 conf = 0

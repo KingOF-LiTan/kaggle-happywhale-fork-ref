@@ -90,7 +90,7 @@ def main(cfg: DictConfig, pl_model: type) -> Path:
             accelerator=accelerator,
             devices=num_gpus if accelerator == "gpu" else None,
             strategy=strategy,
-            precision="16-mixed" if cfg.training.use_amp and accelerator == "gpu" else 32,
+            precision=16 if cfg.training.use_amp and accelerator == "gpu" else 32,
             # training
             fast_dev_run=cfg.training.debug,  # run only 1 train batch and 1 val batch
             enable_model_summary=False if cfg.training.debug else True,
@@ -138,34 +138,13 @@ def main(cfg: DictConfig, pl_model: type) -> Path:
     else:
         trainer.fit(model, ckpt_path=resume_from)
 
-        if cfg.training.resume_from is None:
-            trainer.test(model, ckpt_path="best")  # test with the best checkpoint
+        # 优化测试加载逻辑：检查 best 是否存在
+        best_path = trainer.checkpoint_callback.best_model_path
+        if best_path and os.path.exists(best_path):
+            logger.info(f"Testing with the best ckpt: {best_path}")
+            trainer.test(model, ckpt_path=best_path)
         else:
-            current_best_score = (
-                trainer.checkpoint_callback.best_model_score.detach().cpu().numpy()
-            )
-            current_larger_than_initial = current_best_score > initial_best_score
-            mode = trainer.checkpoint_callback.mode
-            best_updated = (mode == "max" and current_larger_than_initial) or (
-                mode == "min" and not current_larger_than_initial
-            )
-            if best_updated:
-                best_ckpt = trainer.checkpoint_callback.best_model_path
-                logger.info("The best model is updated.")
-            else:
-                best_ckpt = initial_best_model
-                logger.info("The best model isn't changed.")
-
-            current_epoch = trainer.current_epoch
-            try:
-                state_dict = torch.load(best_ckpt, map_location="cpu", weights_only=False)["state_dict"]
-            except FileNotFoundError:
-                time.sleep(30)
-                state_dict = torch.load(best_ckpt, map_location="cpu", weights_only=False)["state_dict"]
-            model.load_state_dict(state_dict, strict=True)
-            trainer = _init_trainer(resume=False)
-            trainer.current_epoch = current_epoch
-            logger.info(f"Testing with the best ckpt: {best_ckpt}")
+            logger.warning("Best checkpoint not found, testing with current model weights.")
             trainer.test(model)
 
         # extract weights and save
@@ -198,4 +177,7 @@ def entry(cfg: DictConfig) -> None:
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    if multiprocessing.get_start_method(allow_none=True) != "spawn":
+        multiprocessing.set_start_method("spawn", force=True)
     entry()

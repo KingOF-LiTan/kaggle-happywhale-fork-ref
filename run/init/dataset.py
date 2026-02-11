@@ -46,17 +46,32 @@ def get_happy_whale_dataset(
     )
 
     if cfg.pseudo_label_filename is not None:
-        df_pl = HappyWhaleDataset.create_dataframe(
-            num_folds,
-            seed,
-            num_records,
-            phase,
-            pseudo_label_filename=cfg.pseudo_label_filename,
-        )
+        print(f"\n[DEBUG] Loading pseudo labels: {cfg.pseudo_label_filename}")
+        try:
+            df_pl = HappyWhaleDataset.create_dataframe(
+                num_folds,
+                seed,
+                num_records,
+                phase,
+                pseudo_label_filename=cfg.pseudo_label_filename,
+            )
+            print(f"[DEBUG] Loaded pseudo df, shape: {df_pl.shape}")
+        except Exception as e:
+            print(f"[DEBUG] Error loading pseudo labels: {e}")
+            raise e
+
+        if "conf" in df_pl.columns:
+            print(f"[DEBUG] Conf stats: min={df_pl['conf'].min()}, max={df_pl['conf'].max()}")
+        else:
+            print(f"[DEBUG] 'conf' column NOT found in pseudo df! Columns: {df_pl.columns}")
+            
+        print(f"[DEBUG] Filtering with conf > {cfg.pseudo_label_conf}")
         df_pl = df_pl[df_pl["conf"] > cfg.pseudo_label_conf]
+        print(f"[DEBUG] After filter, shape: {df_pl.shape}")
 
     if phase == "train":
         train_df = df[(df["fold"] != val_fold) & (df["fold"] != test_fold)]
+
         val_df = df[df["fold"] == val_fold]
         test_df = df[df["fold"] == test_fold]
         if cfg.pseudo_label_filename is not None:

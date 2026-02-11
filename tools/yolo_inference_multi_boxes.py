@@ -1,19 +1,20 @@
 import os
+import json
 import pandas as pd
 import numpy as np
 from pathlib import Path
 from tqdm import tqdm
 from ultralytics import YOLO
-import cv2
-import json
 
-def run_multi_box_inference(model_path, images_dir, output_json):
+def run_multi_box_inference(model_path, images_dir, image_list=None):
     model = YOLO(model_path)
     images_dir = Path(images_dir)
-    image_list = [f.name for f in images_dir.glob("*.jpg")]
+    
+    if image_list is None:
+        image_list = [f.name for f in images_dir.glob("*.jpg")]
     
     results_map = {}
-    print(f"Running multi-box inference on {len(image_list)} images...")
+    print(f"Running multi-box inference on {len(image_list)} images from {images_dir}...")
     
     for img_name in tqdm(image_list):
         img_path = images_dir / img_name
@@ -34,17 +35,26 @@ def run_multi_box_inference(model_path, images_dir, output_json):
         
         results_map[img_name] = img_boxes
 
-    with open(output_json, 'w') as f:
-        json.dump(results_map, f)
-    print(f"Saved multi-box results to {output_json}")
+    return results_map
 
 if __name__ == "__main__":
     ROOT_DIR = Path(__file__).parent.parent.absolute()
     MODEL_PATH = ROOT_DIR / "runs" / "detect" / "outputs" / "yolo_backfin" / "v1_n_6404" / "weights" / "best.pt"
     
-    # 针对测试集进行多框导出，准备相似度筛选
-    run_multi_box_inference(
+    # 1. 训练集
+    train_results = run_multi_box_inference(
         model_path=str(MODEL_PATH),
-        images_dir=ROOT_DIR / "happywhale_data" / "test_images",
-        output_json=ROOT_DIR / "happywhale_data" / "test_multi_boxes.json"
+        images_dir=ROOT_DIR / "happywhale_data" / "train_images"
     )
+    with open(ROOT_DIR / "happywhale_data" / "train_multi_boxes.json", 'w') as f:
+        json.dump(train_results, f)
+
+    # 2. 测试集
+    test_results = run_multi_box_inference(
+        model_path=str(MODEL_PATH),
+        images_dir=ROOT_DIR / "happywhale_data" / "test_images"
+    )
+    with open(ROOT_DIR / "happywhale_data" / "test_multi_boxes.json", 'w') as f:
+        json.dump(test_results, f)
+    
+    print("Done! Generated train_multi_boxes.json and test_multi_boxes.json")

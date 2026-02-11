@@ -129,7 +129,7 @@ training:
   project_name: happy_whale
   resume_from: null
   debug: false
-  use_wandb: false
+  use_wandb: true
   seed: 0
   monitor: val/loss
   monitor_mode: min

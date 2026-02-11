@@ -70,7 +70,10 @@ class PLModel(LightningModule):
             logger.info(f"{phase}: {len(self.datasets[phase])}")
 
     def on_train_epoch_start(self):
-        pass
+        if self.cfg.get("freeze_bn_stats", False):
+            for m in self.modules():
+                if isinstance(m, torch.nn.BatchNorm2d):
+                    m.eval()
 
     def training_step(self, batch: Dict[str, Tensor], batch_idx: int):
         additional_info = {}

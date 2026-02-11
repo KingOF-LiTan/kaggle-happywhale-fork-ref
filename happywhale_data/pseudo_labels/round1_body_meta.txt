@@ -1,0 +1,6 @@
+exp_name: round1_body
+sim_threshold: 0.7
+n_pseudo: 11231
+n_test: 27956
+n_leaked_val: 8
+concat_mode: False
