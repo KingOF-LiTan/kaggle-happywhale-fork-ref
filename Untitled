@@ -27,3 +27,155 @@ python -m run.train --config-name config_effb0 \
   dataset.bbox=null dataset.crop=backfin \
   +freeze_bn_stats=true \
   out_dir=./outputs/fin_b7_final_512
+
+//导出特征fullbody
+  # Train & Val (用于 KNN 库和阈值搜索)
+python -m run.extract_embeddings --config-name config_effb0 \
+  model.base_model=tf_efficientnet_b7 dataset.bbox=null dataset.crop=fb training.num_workers=8 \
+  +extract_phase=train +extract_ckpt_path='./outputs/body_b7_final_512/happy_whale/rc2bocm6/checkpoints/last.ckpt' +extract_out='./outputs/emb/b7_body_train.npz'
+  /root/autodl-tmp/kaggle-happywhale-fork-ref/outputs/body_b7_final_512/happy_whale/rc2bocm6/checkpoints/last.ckpt
+python -m run.extract_embeddings --config-name config_effb0 \
+  model.base_model=tf_efficientnet_b7 dataset.bbox=null dataset.crop=fb training.num_workers=0 \
+  +extract_phase=val +extract_ckpt_path='./outputs/body_b7_final_512/happy_whale/rc2bocm6/checkpoints/last.ckpt' +extract_out='./outputs/emb/b7_body_val.npz'
+
+# Test (用于最终提交)
+python -m run.extract_embeddings --config-name config_effb0 \
+  model.base_model=tf_efficientnet_b7 dataset.bbox=null dataset.crop=fb training.num_workers=8 \
+  +extract_phase=test +extract_ckpt_path='./outputs/body_b7_final_512/happy_whale/rc2bocm6/checkpoints/last.ckpt' +extract_out='./outputs/emb/b7_body_test.npz'
+
+
+  //导出特征fin
+  # Train & Val
+python -m run.extract_embeddings --config-name config_effb0 \
+  model.base_model=tf_efficientnet_b7 head.type=curricularface dataset.bbox=null dataset.crop=backfin training.num_workers=8 \
+  +extract_phase=train +extract_ckpt_path='./outputs/fin_b7_final_512/happy_whale/h2i3yt0b/checkpoints/last.ckpt' +extract_out='./outputs/emb/b7_fin_train.npz'
+/root/autodl-tmp/kaggle-happywhale-fork-ref/outputs/fin_b7_final_512/happy_whale/h2i3yt0b/checkpoints/last.ckpt
+python -m run.extract_embeddings --config-name config_effb0 \
+  model.base_model=tf_efficientnet_b7 head.type=curricularface dataset.bbox=null dataset.crop=backfin training.num_workers=8 \
+  +extract_phase=val +extract_ckpt_path='./outputs/fin_b7_final_512/happy_whale/h2i3yt0b/checkpoints/last.ckpt' +extract_out='./outputs/emb/b7_fin_val.npz'
+
+# Test
+python -m run.extract_embeddings --config-name config_effb0 \
+  model.base_model=tf_efficientnet_b7 head.type=curricularface dataset.bbox=null dataset.crop=backfin training.num_workers=8 \
+  +extract_phase=test +extract_ckpt_path='./outputs/fin_b7_final_512/happy_whale/h2i3yt0b/checkpoints/last.ckpt' +extract_out='./outputs/emb/b7_fin_test.npz'
+
+  knn 检索 concat 权重1比1 分数最高 0.7
+  python tools/make_knn_concat_submission.py \
+    --body_train_dir ./outputs/emb/b7_body_train.npz \
+    --body_test_dir  ./outputs/emb/b7_body_test.npz \
+    --fin_train_dir  ./outputs/emb/b7_fin_train.npz \
+    --fin_test_dir   ./outputs/emb/b7_fin_test.npz \
+    --val_data_dir   ./outputs/emb/b7_body_val.npz \
+    --fin_val_dir    ./outputs/emb/b7_fin_val.npz \
+    --out ./outputs/submission_concat.csv
+
+生成伪标签迭代 generate_pseudo_labels.py
+
+python tools/generate_pseudo_labels.py \
+    --train_emb ./outputs/emb/b7_body_train.npz \
+    --test_emb ./outputs/emb/b7_body_test.npz \
+    --val_emb ./outputs/emb/b7_body_val.npz \
+    --sim_threshold 0.7 \
+    --exp_name round1_body
+
+ Loading single-model embeddings...
+  Train: (40826, 512), Test: (27956, 512)
+Building KNN index...
+
+Generating pseudo labels (sim > 0.7, dist < 0.3000)...
+  Top1 distance distribution:
+    Q10: 0.1609
+    Q25: 0.2346
+    Q50: 0.3379
+    Q75: 0.4193
+    Q90: 0.4725
+    Q95: 0.4987
+
+  Pseudo labels: 11235/27956 (40.2%)
+  Unique individuals: 3269
+  Species distribution (top 5):
+    bottlenose_dolphin: 2810
+    beluga: 1578
+    humpback_whale: 1471
+    false_killer_whale: 1452
+    killer_whale: 891
+
+  Checking validation set leakage...
+    Computing pseudo(11235) × val(10207) similarity...
+    Leak threshold: sim > 0.95
+    Leaked val samples: 8/10207 (0.08%)
+    Val sim distribution: min=0.2592, max=0.9799, mean=0.6426, >0.9=143
+
+✅ Pseudo labels saved to happywhale_data/pseudo_labels/round1_body.csv
+✅ Leaked val indices saved to happywhale_data/pseudo_labels/round1_body_leaked_val.npy
+✅ Metadata saved to happywhale_data/pseudo_labels/round1_body_meta.txt
+
+pseudo_label_filename: "round1_body.csv"
+现在用得到的伪标签继续迭代fin重训练
+python -m run.train --config-name config_effb0 \
+  model.base_model=tf_efficientnet_b7 \
+  preprocessing.h_resize_to=512 preprocessing.w_resize_to=512 \
+  training.batch_size=20 training.accumulate_grad_batches=4 \
+  training.epoch=30 \
+  scheduler=cosine_warmup \
+  augmentation.p_shuffle=0.0 augmentation.p_posterize=0.0 \
+  dataset.bbox=null dataset.crop=backfin \
+  +freeze_bn_stats=true \
+  out_dir=./outputs/fin_b7_final_512
+
+python -m run.train --config-name config_effb0 \
+  model.base_model=tf_efficientnet_b7 \
+  preprocessing.h_resize_to=512 preprocessing.w_resize_to=512 \
+  training.batch_size=20 training.accumulate_grad_batches=4 \
+  training.epoch=30 \
+  training.num_workers=8 \
+  scheduler=cosine_warmup \
+  +augmentation.p_sharpen=0.3 augmentation.p_gray=0.2 \
+  +forwarder.mixup_alpha=0.5 \
+  dataset.bbox=null dataset.crop=backfin \
+  +freeze_bn_stats=true \
+  out_dir=./outputs/fin_b7_final_512_round1
+
+
+//day2 迭代得到的伪标签训练效果不佳 和 直接训练差距不到0.1
+伪标签没有有效的fin box 尝试修复问题
+重新生成伪标签
+
+    python tools/make_knn_concat_submission.py \
+    --body_train_dir ./outputs/emb/b7_body_train.npz \
+    --body_test_dir  ./outputs/emb/b7_body_test.npz \
+    --fin_train_dir  ./outputs/emb/b7_fin_train.npz \
+    --fin_test_dir   ./outputs/emb/b7_fin_test.npz \
+    --val_data_dir   ./outputs/emb/b7_body_val.npz \
+    --fin_val_dir    ./outputs/emb/b7_fin_val.npz \
+    --save_concat ./outputs/emb/concat_b7_fw05 \
+    --fin_weight 0.5 \
+    --out ./outputs/submission_concat.csv
+
+
+Step 2: Body 回训流程
+拿concat的做伪标签
+
+python tools/generate_pseudo_labels.py \
+    --load_concat ./outputs/emb/concat_b7_fw05 \
+    --val_emb ./outputs/emb/b7_body_val.npz \
+    --fin_val_emb ./outputs/emb/b7_fin_val.npz \
+    --sim_threshold 0.6 \
+    --exp_name round2_concat
+
+用伪标签全量训练body
+python run/train.py --config-name pseudo_round2 training.num_gpus=1
+
+python -m run.train --config-name config_effb0 \
+  model.base_model=tf_efficientnet_b7 \
+  preprocessing.h_resize_to=512 preprocessing.w_resize_to=512 \
+  training.batch_size=20 training.accumulate_grad_batches=4 \
+  training.epoch=30 \
+  training.num_workers=8 \
+  scheduler=cosine_warmup \
+  +augmentation.p_sharpen=0.3 augmentation.p_gray=0.2 \
+  +forwarder.mixup_alpha=0.5 \
+  dataset.bbox=null dataset.crop=fb \
+  +freeze_bn_stats=true \
+  dataset.pseudo_label_filename="round2_concat.csv" dataset.pseudo_label_conf=0.6 dataset.phase="all" \
+  out_dir=./outputs/body_b7_final_512_round2
