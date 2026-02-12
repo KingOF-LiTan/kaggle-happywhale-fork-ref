@@ -1,0 +1,47 @@
+defaults:
+  - pseudo_round2
+  - _self_
+
+dataset:
+    crop: backfin
+    # Pseudo label file generated in previous step
+    # Make sure to run generate_pseudo_labels.py with --exp_name round2_pseudo_0.5 first!
+    pseudo_label_filename: round2_pseudo_0.5.csv
+
+    # High Resolution
+    img_size: 896 
+
+training:
+    # 896px is VERY memory intensive on B7.
+    # Single 3090 (24GB): Batch Size 4-8.
+    # Multi-GPU (DDP): Total Batch needs to be large enough (e.g. 16+).
+    # If 2x3090: BS=4 per GPU -> Total 8. Use accumulate_grad_batches=2 -> Effective 16.
+    batch_size: 4
+    batch_size_test: 8
+    accumulate_grad_batches: 2
+    
+    # SyncBN is crucial for small per-GPU batch sizes (e.g. < 8)
+    # Automatically enabled by Trainer if strategy='ddp' and num_gpus > 1 with sync_batchnorm=True
+    # However, we can enforce it here if needed, but pl_model usually handles it.
+    
+    val_check_interval: 1.0 # Check every epoch since dataset is large
+    limit_val_batches: 1.0  # Full validation
+
+model:
+    base_model: tf_efficientnet_b7_ns
+    pooling: gem
+    use_fc: false
+    retrain: true
+    param:
+        n_classes: 15587 # Original only
+        s: 30.0
+        m: 0.3 # Slightly reduce margin for pseudo-labels to reduce noise impact? Or keep 0.5. 
+        # Standard ArcFace margin is usually 0.5. Staying safe at 0.5 or 0.3.
+        # Pseudo-labels are noisy, maybe lower margin helps convergence.
+        # But for Fin, high margin helps separate subtle differences. Keep default 0.3-0.5.
+        
+    # Optimizer settings for fine-tuning
+    optimizer:
+        # Lower LR for fine-tuning or high-res training
+        lr_backbone: 1e-4
+        lr_head: 1e-3

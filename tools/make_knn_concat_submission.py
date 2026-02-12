@@ -107,7 +107,7 @@ def concat_features(body_feat, body_idx, fin_feat, fin_idx, fin_weight=1.0):
     return concat, np.array(all_idx, dtype=int)
 
 
-def search_best_threshold(train_feat, train_targets, val_feat, val_targets, neighbors=50):
+def search_best_threshold(train_feat, train_targets, train_idx, val_feat, val_targets, val_idx, neighbors=50):
     print("Searching for best threshold on validation set (MAP@5)...")
     neigh = NearestNeighbors(n_neighbors=neighbors, metric="cosine").fit(train_feat)
     distances, idxs = neigh.kneighbors(val_feat, neighbors, return_distance=True)
@@ -116,9 +116,35 @@ def search_best_threshold(train_feat, train_targets, val_feat, val_targets, neig
     for th in np.linspace(0.05, 0.45, 41):
         scores = []
         for i in range(len(val_feat)):
-            d, idx, target = distances[i], idxs[i], val_targets[i]
-            pred_all = train_targets[idx].tolist()
-            pred = [pred_all[0], -1] if d[0] < th else [-1, pred_all[0]]
+            query_orig_idx = val_idx[i]
+            nb_indices = idxs[i]
+            nb_dists = distances[i]
+            
+            pred_all = []
+            d0 = -1
+            
+            for k in range(len(nb_indices)):
+                train_pos = nb_indices[k]
+                train_orig_idx = train_idx[train_pos]
+                
+                if train_orig_idx == query_orig_idx:
+                    continue
+                
+                if len(pred_all) == 0:
+                    d0 = nb_dists[k]
+                
+                label = train_targets[train_pos]
+                if label not in pred_all:
+                    pred_all.append(label)
+                if len(pred_all) >= 5:
+                    break
+            
+            if len(pred_all) == 0:
+                scores.append(0.0)
+                continue
+
+            target = val_targets[i]
+            pred = [pred_all[0], -1] if d0 < th else [-1, pred_all[0]]
             for p in pred_all:
                 if len(pred) >= 5:
                     break
@@ -225,7 +251,7 @@ def main():
             v_targets = train_targets[cat_v_idx]
             print(f"  Concat val: {cat_v_f.shape} ({len(cat_v_idx)} samples)")
             args.th = search_best_threshold(
-                cat_tr_f, cat_tr_targets, cat_v_f, v_targets,
+                cat_tr_f, cat_tr_targets, cat_tr_idx, cat_v_f, v_targets, cat_v_idx,
                 neighbors=min(50, args.n_neighbors),
             )
 

@@ -138,22 +138,25 @@ class ArcAdaptiveMarginProduct(nn.modules.Module):
             assert 0 == 1
 
     def forward(self, input, labels):
-        # subcenter
-        cosine_all = F.linear(F.normalize(input), F.normalize(self.weight))
-        cosine_all = cosine_all.view(-1, self.out_features, self.k)
-        cosine, _ = torch.max(cosine_all, dim=2)
-
-        ms = []
-        ms = self.margins[labels.cpu().numpy()]
-        cos_m = torch.from_numpy(np.cos(ms)).float().cuda()
-        sin_m = torch.from_numpy(np.sin(ms)).float().cuda()
-        th = torch.from_numpy(np.cos(math.pi - ms)).float().cuda()
-        mm = torch.from_numpy(np.sin(math.pi - ms) * ms).float().cuda()
-        labels = F.one_hot(labels, self.out_features).float()
-        sine = torch.sqrt(1.0 - torch.pow(cosine, 2))
-        phi = cosine * cos_m.view(-1, 1) - sine * sin_m.view(-1, 1)
-        phi = torch.where(cosine > th.view(-1, 1), phi, cosine - mm.view(-1, 1))
-        output = (labels * phi) + ((1.0 - labels) * cosine)
-        output *= self.s
-
-        return output, cosine
+        with torch.cuda.amp.autocast(enabled=False):
+            input = input.float()
+            weight = self.weight.float()
+            # subcenter
+            cosine_all = F.linear(F.normalize(input), F.normalize(weight))
+            cosine_all = cosine_all.view(-1, self.out_features, self.k)
+            cosine, _ = torch.max(cosine_all, dim=2)
+    
+            ms = []
+            ms = self.margins[labels.cpu().numpy()]
+            cos_m = torch.from_numpy(np.cos(ms)).float().cuda()
+            sin_m = torch.from_numpy(np.sin(ms)).float().cuda()
+            th = torch.from_numpy(np.cos(math.pi - ms)).float().cuda()
+            mm = torch.from_numpy(np.sin(math.pi - ms) * ms).float().cuda()
+            labels = F.one_hot(labels, self.out_features).float()
+            sine = torch.sqrt((1.0 - torch.pow(cosine, 2)).clamp(0, 1))
+            phi = cosine * cos_m.view(-1, 1) - sine * sin_m.view(-1, 1)
+            phi = torch.where(cosine > th.view(-1, 1), phi, cosine - mm.view(-1, 1))
+            output = (labels * phi) + ((1.0 - labels) * cosine)
+            output *= self.s
+    
+            return output, cosine

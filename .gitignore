@@ -153,15 +153,23 @@ cython_debug/
 .cursor/
 
 # --- HappyWhale Project Specific ---
+# Exclude large data
 happywhale_data/train_images/
 happywhale_data/test_images/
 happywhale_data/cropped/
+outputs/
+wandb/
+
+# Global Ignores
 *.rar
 *.zip
 *.7z
-outputs/
-wandb/
 *.npy
+
+# Exceptions (Do NOT ignore these)
+!happywhale_data/*.npy      # Keep individual_id.npy, species.npy
+!happywhale_data/*.json     # Keep metadata JSONs
+!happywhale_data/*.csv      # Keep CSVs (redundant but safe)
 !run/conf/*.csv
 !src/datasets/*.csv
 # YOLO data and results
@@ -173,3 +181,16 @@ runs/
 happywhale_data/yolo_backfin/vis/
 tools/backfin_annotations.xlsx
 tools/yolov8n.pt
+
+# Model Weights (Old & New)
+*.ckpt
+*.pth
+*.bin
+*.h5
+*.onnx
+
+# Logs and specific files
+*.log
+test_result.log
+debug_dataset/
+

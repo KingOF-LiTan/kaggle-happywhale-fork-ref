@@ -78,7 +78,7 @@ def main(cfg: DictConfig, pl_model: type) -> Path:
         num_gpus = int(cfg.training.num_gpus)
         accelerator = "gpu" if torch.cuda.is_available() else "cpu"
         if num_gpus > 1:
-            strategy = "ddp"
+            strategy = cfg.training.get("strategy", "ddp")
             sync_batchnorm = True
         else:
             strategy = "auto"
@@ -90,7 +90,7 @@ def main(cfg: DictConfig, pl_model: type) -> Path:
             accelerator=accelerator,
             devices=num_gpus if accelerator == "gpu" else None,
             strategy=strategy,
-            precision=16 if cfg.training.use_amp and accelerator == "gpu" else 32,
+            precision="16-mixed" if cfg.training.use_amp and accelerator == "gpu" else 32,
             # training
             fast_dev_run=cfg.training.debug,  # run only 1 train batch and 1 val batch
             enable_model_summary=False if cfg.training.debug else True,
@@ -100,7 +100,7 @@ def main(cfg: DictConfig, pl_model: type) -> Path:
             callbacks=[checkpoint_cb],
             logger=pl_logger,
             num_sanity_val_steps=0 if is_test_mode else 2,
-            sync_batchnorm=sync_batchnorm,
+            # sync_batchnorm=sync_batchnorm, # Removed in PL 2.0
         )
 
     trainer = _init_trainer()
@@ -170,7 +170,7 @@ def prepare_env() -> None:
     os.environ.setdefault("PYTHONPATH", ".")
 
 
-@hydra.main(config_path="conf", config_name="config")
+@hydra.main(config_path="conf", config_name="config", version_base="1.1")
 def entry(cfg: DictConfig) -> None:
     prepare_env()
     main(cfg, PLModel)

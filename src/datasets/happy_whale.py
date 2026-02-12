@@ -255,14 +255,13 @@ class HappyWhaleDataset(Dataset):
             fold[indices] = i
 
         df["fold"] = fold
-        df.species.replace(
+        df["species"] = df["species"].replace(
             {
                 "globis": "short_finned_pilot_whale",
                 "pilot_whale": "short_finned_pilot_whale",
                 "kiler_whale": "killer_whale",
                 "bottlenose_dolpin": "bottlenose_dolphin",
-            },
-            inplace=True,
+            }
         )
         le_species = LabelEncoder()
         le_species.classes_ = np.load(root / "species.npy", allow_pickle=True)
@@ -321,13 +320,13 @@ class HappyWhaleDataset(Dataset):
             print(f"Checking file existence for crop type: {self.crop}...")
             exists_mask = []
             for i in tqdm(range(len(self.df)), desc="Filtering missing crops"):
-                file_path = self.root / self.get_file_name(i)
+                file_path = self.root / self.get_file_name(i, self.phase)
                 exists_mask.append(file_path.exists())
             
             original_len = len(self.df)
             if original_len > 0 and not any(exists_mask):
                 # Debug info if everything is filtered
-                sample_path = self.root / self.get_file_name(0)
+                sample_path = self.root / self.get_file_name(0, self.phase)
                 print(f"ERROR: All images filtered! Sample path checked: {sample_path}")
             
             self.df = self.df[exists_mask].reset_index(drop=True)
@@ -346,6 +345,9 @@ class HappyWhaleDataset(Dataset):
         return len(self.df)
 
     def get_file_name(self, index: int, phase: str = "train") -> str:
+        if phase == "all":
+            phase = "train"
+
         if "origin" in self.df.columns:
             origin = self.df.loc[index, "origin"]
             if origin == "test":

@@ -1,0 +1,32 @@
+# --- Core Deep Learning (Don't pin Torch - use system install) ---
+# torch # Provided by Blackwell Image
+# torchvision # Provided by Blackwell Image
+pytorch-lightning==2.3.3
+torchmetrics>=1.5.2
+torch-optimizer>=0.3.0
+pytorch-ranger>=0.1.1
+timm==0.9.16
+
+# --- Data Science & Processing ---
+# NumPy/Pandas/Scipy/Pillow/Albumentations strict pins REMOVED for Python 3.12 compatibility
+numpy>=1.26.0
+pandas>=2.0.0
+scikit-learn
+scipy>=1.11.0
+scikit-image
+opencv-python-headless
+albumentations>=1.4.0
+Pillow>=10.0.0
+
+# --- Configuration & Experiment Tracking ---
+hydra-core>=1.3.2
+omegaconf>=2.3.0
+wandb
+tqdm
+
+# --- Utilities ---
+matplotlib
+seaborn
+pydantic
+GitPython
+kaggle

@@ -63,8 +63,11 @@ def _extract(
     )
     
     # Apply fold filtering if not 'test'
-    if phase != "test":
-        df = df[df["fold"] != cfg.dataset.val_fold] if phase == "train" else df[df["fold"] == cfg.dataset.val_fold]
+    # Apply fold filtering if not 'test'
+    if phase == "val":
+        df = df[df["fold"] == cfg.dataset.val_fold]
+    elif phase == "train":
+        df = df[df["fold"] != cfg.dataset.val_fold]
     
     raw_dataset = HappyWhaleDataset(df, phase=phase, cfg=cfg.dataset)
     

@@ -2,10 +2,9 @@
 
 hydra:
   job:
-    name: happy_whale_effb7
+    name: happy_whale_fin_effb7
   run:
     dir: ${out_dir}
-
 
 defaults:
   - dataset: happy_whale
@@ -19,9 +18,12 @@ defaults:
 dataset:
   pseudo_label_filename: "round2_concat.csv"
   pseudo_label_conf: 0.6
-  phase: "train" # 切换回 train 模式以使用验证集
+  phase: "train" # 验证模式
   type: happy_whale
   num_classes: 15587
+  # Fin 模型关键参数
+  crop: backfin
+  bbox: null
 
 head:
   type: adaptive_arcface
@@ -45,9 +47,7 @@ pool:
   type: gem
   p: 3
   p_trainable: false
-#====
-# Model
-#====
+
 model:
   restore_path: ${test_model}
   base_model: tf_efficientnet_b7_ns
@@ -101,18 +101,15 @@ forwarder:
     rot90: false
     rot180: false
 
-#====
-# Training
-#====
 training:
-  project_name: happy_whale_pseudo
-  epoch: 15
-  batch_size: 20 # 根据 B7 显存调整
+  project_name: happy_whale_fin_pseudo
+  epoch: 30
+  batch_size: 20
   batch_size_test: 32
   num_workers: 8
   drop_last: true
   num_gpus: 1
-  resume_from: null # 我们可以选择从之前的 checkpoint resume，或者从头训练。这里设为 null 让它加载预训练 backbone
+  resume_from: null
   seed: 0
   use_amp: true
   accumulate_grad_batches: 4
